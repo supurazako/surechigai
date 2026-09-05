@@ -152,7 +152,9 @@ def main() -> None:
         else:
             print("画像なし（Pillow 未導入。done にはなる）")
         s, html = req("GET", "/gallery")
-        assert s == 200 and "latest.json" in html.decode("utf-8")
+        page = html.decode("utf-8")
+        assert s == 200 and "latest.json" in page
+        assert 'id="generate-form"' in page and "fetch('/submit'" in page
         print(f"OK  jobs: #{jid} #{j3['id']}")
     finally:
         proc.terminate()
