@@ -10,9 +10,28 @@
 # PowerShell（Windows 標準）。&& は使えないので 1 行ずつ
 cd server
 python server.py --dry     # API を呼ばずに動作確認（Pillow があれば文字入りの代替画像）
-python server.py           # 本番。OPENAI_API_KEY を環境変数に入れておく
+python server.py           # 本番。OpenAI gpt-image-2 / high。OPENAI_API_KEY を環境変数に入れておく
 python test_server.py      # 口を一通り叩く自動テスト（dry）
+python -m unittest test_api  # 入力検証・HTTPジョブ追跡・生成失敗時の復帰
 ```
+
+### OpenAIで高品質生成
+
+標準設定は`gpt-image-2`・`quality=high`・1024×1024・JPEGです。JPEGの`output_compression`は85に設定しています。ローカル生成から切り替える場合は、実際にサーバーを動かすPCで既存のサーバーを終了してから次で起動します。
+
+```sh
+python server.py --backend openai --model gpt-image-2 --quality high
+```
+
+そのターミナルへ`OPENAI_API_KEY`を設定する必要があります。別のPCや別ターミナルに設定したキーは自動では共有されません。キー未設定時は起動を中止し、SD-Turboへ自動で切り替わることはありません。API利用権限・課金設定も必要です。
+
+キーをコマンド履歴に残さず、そのサーバープロセスだけへ渡す場合は、`server/`で次を実行し、非表示の入力欄へキーを入力できます（ファイルへ保存しません）。
+
+```sh
+python -c "import getpass, os, runpy; os.environ['OPENAI_API_KEY'] = getpass.getpass('OpenAI API key: '); runpy.run_path('server.py', run_name='__main__')"
+```
+
+起動ログに`OpenAI gpt-image-2 quality=high`が表示されることを確認してください。画質優先のためAPI料金と待ち時間は低画質設定より増えます。費用を抑えて比較する場合は`--quality medium`を指定できます。モデルの対応状況は[公式モデル説明](https://developers.openai.com/api/docs/models/gpt-image-2)、料金は[公式料金表](https://developers.openai.com/api/docs/pricing)を参照してください。
 
 ### Apple Siliconでローカル生成
 
@@ -60,12 +79,29 @@ python sim.py --auto 30 --seed 1   # 一気に 30 回すれ違わせて結果を
 |---|---|---|
 | `POST /submit` | AtomS3R / CLI | `{"device":"A","sentence":"暇だったので　真夜中に　…"}` または `{"device":"A","words":["…",…]}`。即 `{"id":12,"status":"queued"}` |
 | `GET /latest.json` | Tab5 / ブラウザ | `{"latest_id":12,"items":[{id,device,sentence,status,image},…]}`（新しい順 20 件）|
+| `GET /jobs/12` | CLI / submit.py | 1件のジョブ状態。最新20件から外れても取得可能 |
 | `GET /image/12.jpg` | Tab5 / ブラウザ | 生成画像 JPEG（OpenAIは1024×1024、ローカルは512×512）|
 | `GET /` | ブラウザ | 広場ページ。3 秒ごと自動更新 |
 
 - 同じデバイスから同じ文が 60 秒以内に来たら同じ id を返す（再送しても二重生成しない）
 - `status` が `queued → working → done` と変化する（失敗は `error`）。生成時間はバックエンドと端末性能による
 - Tab5向けの表示コードは [../m5stack/tab5_hiroba.ino](../m5stack/tab5_hiroba.ino)
+- リクエスト本文は16KB以内、`device`は1〜32文字、`sentence`は1〜512文字。`words`は空でない文字列の配列。型や長さの不正は400、本文サイズ超過は413を返す。文章は切り捨てない。
+
+## 本番開始前の確認（信頼できるLAN内）
+
+このサーバーには認証・利用者ごとの課金制限・TLSがありません。参加者を管理できるLAN内で使用し、8000番ポートをインターネットへ公開しないでください。公開サービスにする場合は認証、レート制限、HTTPSを別途整備する必要があります。CLIの`--post-url`はHTTPのみ対応です。
+
+1. サーバーPCにPython 3.10以降を用意し、`python test_server.py`と`python -m unittest test_api`を実行する。テスト用データは一時フォルダに保存され、本番の履歴を変更しない。
+2. サーバーを起動するターミナルの環境変数へ`OPENAI_API_KEY`を設定する。キーをソースやコミットへ書かない。OpenAI側の利用権限・課金・利用上限を確認する。
+3. `python server.py --backend openai --host 0.0.0.0 --port 8000`で起動する。保存先は既定で`server/data/`。必要なら`--data-dir <path>`で変更し、停止中にバックアップする。
+4. `python submit.py preflight --random --server http://127.0.0.1:8000`で実画像を1枚生成する（API料金が発生する）。`done`を確認し、ブラウザの広場ページで画像を開く。`/health`の成功だけではAPI接続や生成成功は確認できない。
+5. Mac/LinuxのBLE対応PCで`./target/debug/surechigai --web --post-url http://<サーバーPCのLAN IP>:8000/submit`を起動する。別PCから接続する場合、サーバーPCのファイアウォールで信頼できるLANからの8000番への接続を許可する。
+6. CLIとTab5または別のCLIで6種類を交換し、文章完成→広場の画像→Web Viewerの画像まで確認する。Tab5交換用ファームウェア自身は完成文をPOSTしない。`tab5_hiroba.ino`は別端末の表示専用スケッチ。
+
+画像生成リクエストは[OpenAI Images API](https://developers.openai.com/api/reference/resources/images/methods/generate)へ`gpt-image-2`・1024×1024・JPEG・quality=highを既定として送ります。自動テストは外部APIを呼ばないため、アカウントの権限・残高・実機BLE通信は上記の実環境確認が必要です。
+
+CLIは完成した同一ラウンドを一度だけ投稿し、送信の通信失敗時は最大3回試行します。画像生成自体の失敗を自動再生成はしません。追跡は`/jobs/{id}`を2秒間隔で最大90回行うため、長い順番待ちではViewerが`timeout`になってもサーバーが生成を続けている場合があります。`GET /jobs/{id}`または広場ページで確認できます。サーバー再起動時、処理途中だったジョブは`error`となります。
 
 ## 語句表の書き方
 

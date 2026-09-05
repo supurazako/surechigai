@@ -9,23 +9,32 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
+use uuid::Uuid;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const IO_TIMEOUT: Duration = Duration::from_secs(15);
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
-const POLL_ATTEMPTS: u32 = 40; // 2秒 x 40 = 最大80秒待つ
+const POLL_ATTEMPTS: u32 = 90; // 2秒 x 90 = 最大180秒待つ（画像生成は実測30〜90秒程度かかることがある）
+const SUBMIT_RETRY_ATTEMPTS: u32 = 3;
 
 /// 完成した文章の画像生成状況。Web Viewerの表示用にState経由で共有する。
 #[derive(Clone, Debug)]
 pub struct ImageStatus {
-    /// "queued" / "working" / "done" / "error" / "timeout" / "送信失敗" のいずれか
+    /// "送信中" / "queued" / "working" / "done" / "error" / "timeout" / "送信失敗" のいずれか
     pub status: String,
     pub image_url: Option<String>,
 }
 
-pub type ImageStatusHandle = Arc<Mutex<Option<ImageStatus>>>;
+/// 文章の完成ラウンド（`Sentence::round`）ごとに追跡する。
+/// 新しいラウンドの追跡が始まったら、古いラウンドの更新は無視して上書き競合を防ぐ。
+pub(crate) struct Tracked {
+    round: Uuid,
+    pub(crate) status: Option<ImageStatus>,
+}
 
-pub fn new_image_status_handle() -> ImageStatusHandle {
+pub(crate) type ImageStatusHandle = Arc<Mutex<Option<Tracked>>>;
+
+pub(crate) fn new_image_status_handle() -> ImageStatusHandle {
     Arc::new(Mutex::new(None))
 }
 
@@ -98,7 +107,7 @@ fn request(parsed: &ParsedUrl, method: &str, body: Option<&str>) -> std::io::Res
             method = method,
             path = parsed.path,
             host = parsed.host,
-            len = body.as_bytes().len(),
+            len = body.len(),
             body = body,
         ),
         None => format!(
@@ -126,8 +135,9 @@ fn request(parsed: &ParsedUrl, method: &str, body: Option<&str>) -> std::io::Res
     stream.read_to_end(&mut response)?;
 
     let text = String::from_utf8_lossy(&response);
-    let status_line = text.lines().next().unwrap_or_default().to_string();
-    if !status_line.contains("200") {
+    let status_line = text.lines().next().unwrap_or_default();
+    let status_code = status_line.split_whitespace().nth(1);
+    if status_code != Some("200") {
         return Err(std::io::Error::other(format!(
             "HTTPステータス異常: {status_line}"
         )));
@@ -139,29 +149,69 @@ fn request(parsed: &ParsedUrl, method: &str, body: Option<&str>) -> std::io::Res
     Ok(body_text.to_string())
 }
 
-fn update(handle: &ImageStatusHandle, status: &str, image_url: Option<String>) {
+/// このラウンドの追跡を最新として登録する（他ラウンドの古い更新から保護するため）。
+fn start(handle: &ImageStatusHandle, round: Uuid, status: &str) {
     if let Ok(mut guard) = handle.lock() {
-        *guard = Some(ImageStatus {
-            status: status.to_string(),
-            image_url,
+        *guard = Some(Tracked {
+            round,
+            status: Some(ImageStatus {
+                status: status.to_string(),
+                image_url: None,
+            }),
         });
     }
 }
 
-fn track_blocking(post_url: &str, device: &str, sentence: &str, handle: &ImageStatusHandle) {
+/// 現在追跡中のラウンドと一致する場合のみ状態を更新する。
+/// 一致しない場合は、より新しいラウンドの追跡がすでに始まっているとみなして何もしない。
+fn update(handle: &ImageStatusHandle, round: Uuid, status: &str, image_url: Option<String>) {
+    if let Ok(mut guard) = handle.lock() {
+        let is_current = guard.as_ref().is_some_and(|tracked| tracked.round == round);
+        if is_current {
+            *guard = Some(Tracked {
+                round,
+                status: Some(ImageStatus {
+                    status: status.to_string(),
+                    image_url,
+                }),
+            });
+        }
+    }
+}
+
+fn submit_with_retry(submit_url: &ParsedUrl, body: &str) -> std::io::Result<String> {
+    let mut last_err = None;
+    for attempt in 0..SUBMIT_RETRY_ATTEMPTS {
+        if attempt > 0 {
+            std::thread::sleep(Duration::from_secs(2u64.pow(attempt)));
+        }
+        match request(submit_url, "POST", Some(body)) {
+            Ok(text) => return Ok(text),
+            Err(err) => last_err = Some(err),
+        }
+    }
+    Err(last_err.unwrap())
+}
+
+fn track_blocking(
+    post_url: &str,
+    device: &str,
+    sentence: &str,
+    round: Uuid,
+    handle: &ImageStatusHandle,
+) {
     let Some(submit_url) = parse_http_url(post_url) else {
-        update(handle, "post_urlを解釈できません", None);
+        update(handle, round, "post_urlを解釈できません", None);
         return;
     };
     let origin = origin_of(&submit_url);
 
-    update(handle, "送信中", None);
     let body = json_body(device, sentence);
-    let response_text = match request(&submit_url, "POST", Some(&body)) {
+    let response_text = match submit_with_retry(&submit_url, &body) {
         Ok(text) => text,
         Err(err) => {
             eprintln!("広場サーバへの送信でエラー: {err}");
-            update(handle, "送信失敗", None);
+            update(handle, round, "送信失敗", None);
             return;
         }
     };
@@ -170,62 +220,62 @@ fn track_blocking(post_url: &str, device: &str, sentence: &str, handle: &ImageSt
         .and_then(|value| value.get("id").and_then(Value::as_i64))
     else {
         eprintln!("広場サーバの応答からidを取得できません: {response_text}");
-        update(handle, "送信失敗", None);
+        update(handle, round, "送信失敗", None);
         return;
     };
-    update(handle, "queued", None);
+    update(handle, round, "queued", None);
 
-    let Some(latest_url) = parse_http_url(&format!("{origin}/latest.json")) else {
+    let Some(job_url) = parse_http_url(&format!("{origin}/jobs/{id}")) else {
         return;
     };
     for _ in 0..POLL_ATTEMPTS {
         std::thread::sleep(POLL_INTERVAL);
-        let Ok(text) = request(&latest_url, "GET", None) else {
+        let Ok(text) = request(&job_url, "GET", None) else {
             continue;
         };
         let Ok(value) = serde_json::from_str::<Value>(&text) else {
             continue;
         };
-        let Some(items) = value.get("items").and_then(Value::as_array) else {
-            continue;
-        };
-        let Some(item) = items
-            .iter()
-            .find(|item| item.get("id").and_then(Value::as_i64) == Some(id))
-        else {
-            continue;
-        };
-        let status = item
+        let status = value
             .get("status")
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string();
         match status.as_str() {
             "done" => {
-                let image_url = item
+                let image_url = value
                     .get("image")
                     .and_then(Value::as_str)
                     .map(|path| format!("{origin}{path}"));
-                update(handle, "done", image_url);
+                update(handle, round, "done", image_url);
                 return;
             }
             "error" => {
-                update(handle, "error", None);
+                update(handle, round, "error", None);
                 return;
             }
             _ => {
-                update(handle, &status, None);
+                update(handle, round, &status, None);
             }
         }
     }
-    update(handle, "timeout", None);
+    update(handle, round, "timeout", None);
 }
 
 /// 完成した文章を広場サーバへ非同期にPOSTし、画像生成の完了までポーリングして
 /// `handle` に反映する。エラーはログに出すだけで交換処理は止めない。
-pub fn spawn_post(post_url: String, device: String, sentence: String, handle: ImageStatusHandle) {
+/// `round` は`Sentence::round`。同時に複数ラウンドが追跡されても、
+/// 最後に`spawn_post`されたラウンドの更新だけがWeb Viewerに反映される。
+pub(crate) fn spawn_post(
+    post_url: String,
+    device: String,
+    sentence: String,
+    round: Uuid,
+    handle: ImageStatusHandle,
+) {
+    start(&handle, round, "送信中");
     tokio::task::spawn_blocking(move || {
-        track_blocking(&post_url, &device, &sentence, &handle);
+        track_blocking(&post_url, &device, &sentence, round, &handle);
     });
 }
 
@@ -272,21 +322,134 @@ mod tests {
     }
 
     #[test]
-    fn finds_matching_item_and_reads_image() {
-        let text = r#"{"latest_id":2,"items":[
-            {"id":2,"device":"B","sentence":"...","status":"working","image":null},
-            {"id":1,"device":"A","sentence":"...","status":"done","image":"/image/1.jpg"}
-        ]}"#;
+    fn reads_status_and_image_from_job_response() {
+        let text = r#"{"id":1,"device":"A","sentence":"...","status":"done","image":"/image/1.jpg","error":null,"created":1.0}"#;
         let value: Value = serde_json::from_str(text).unwrap();
-        let items = value.get("items").and_then(Value::as_array).unwrap();
-        let item = items
-            .iter()
-            .find(|item| item.get("id").and_then(Value::as_i64) == Some(1))
-            .unwrap();
-        assert_eq!(item.get("status").and_then(Value::as_str), Some("done"));
+        assert_eq!(value.get("status").and_then(Value::as_str), Some("done"));
         assert_eq!(
-            item.get("image").and_then(Value::as_str),
+            value.get("image").and_then(Value::as_str),
             Some("/image/1.jpg")
         );
+    }
+
+    #[test]
+    fn stale_round_update_is_ignored_after_newer_round_starts() {
+        let handle = new_image_status_handle();
+        let old_round = Uuid::new_v4();
+        let new_round = Uuid::new_v4();
+
+        start(&handle, old_round, "送信中");
+        update(&handle, old_round, "queued", None);
+        // 新しいラウンドが追跡を開始した後は、古いラウンドの更新は無視される。
+        start(&handle, new_round, "送信中");
+        update(
+            &handle,
+            old_round,
+            "done",
+            Some("http://x/image/1.jpg".into()),
+        );
+
+        let guard = handle.lock().unwrap();
+        let tracked = guard.as_ref().unwrap();
+        assert_eq!(tracked.round, new_round);
+        assert_eq!(tracked.status.as_ref().unwrap().status, "送信中");
+    }
+
+    #[test]
+    fn tracks_individual_job_over_http_to_completion() {
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/submit", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            for (expected, body) in [
+                ("POST /submit HTTP/1.1", r#"{"id":25,"status":"queued"}"#),
+                (
+                    "GET /jobs/25 HTTP/1.1",
+                    r#"{"id":25,"status":"working","image":null}"#,
+                ),
+                (
+                    "GET /jobs/25 HTTP/1.1",
+                    r#"{"id":25,"status":"done","image":"/image/25.jpg"}"#,
+                ),
+            ] {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut buf = [0; 4096];
+                let n = stream.read(&mut buf).unwrap();
+                assert!(String::from_utf8_lossy(&buf[..n]).starts_with(expected));
+                write!(
+                    stream,
+                    "HTTP/1.0 200 OK\r\nContent-Length: {}\r\n\r\n{}",
+                    body.len(),
+                    body
+                )
+                .unwrap();
+            }
+        });
+        let handle = new_image_status_handle();
+        let round = Uuid::new_v4();
+        start(&handle, round, "送信中");
+        track_blocking(&url, "A", "sentence", round, &handle);
+        server.join().unwrap();
+        let guard = handle.lock().unwrap();
+        let status = guard.as_ref().unwrap().status.as_ref().unwrap();
+        assert_eq!(status.status, "done");
+        assert_eq!(
+            status.image_url.as_deref(),
+            Some(format!("{}/image/25.jpg", url.trim_end_matches("/submit")).as_str())
+        );
+    }
+
+    #[test]
+    fn http_error_is_not_treated_as_success() {
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url =
+            parse_http_url(&format!("http://{}/submit", listener.local_addr().unwrap())).unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0; 4096];
+            assert!(stream.read(&mut buf).unwrap() > 0);
+            stream
+                .write_all(b"HTTP/1.0 500 error-200\r\nContent-Length: 2\r\n\r\n{}")
+                .unwrap();
+        });
+        assert!(request(&url, "POST", Some("{}")).is_err());
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn registers_new_round_before_background_worker_can_start() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .max_blocking_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        let (release, wait) = std::sync::mpsc::channel();
+        let blocker = runtime.spawn_blocking(move || wait.recv().unwrap());
+        let handle = new_image_status_handle();
+        let latest = Uuid::new_v4();
+        let entered = runtime.enter();
+        spawn_post(
+            "invalid".into(),
+            "A".into(),
+            "old".into(),
+            Uuid::new_v4(),
+            handle.clone(),
+        );
+        spawn_post(
+            "invalid".into(),
+            "A".into(),
+            "new".into(),
+            latest,
+            handle.clone(),
+        );
+        let registered = handle.lock().unwrap().as_ref().map(|tracked| tracked.round);
+        release.send(()).unwrap();
+        drop(entered);
+        runtime.block_on(blocker).unwrap();
+        assert_eq!(registered, Some(latest));
     }
 }

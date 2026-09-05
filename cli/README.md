@@ -165,9 +165,11 @@ cargo fmt --package surechigai -- --check
 Linux向けのコンパイルと自動テスト:
 
 ```sh
-docker build -f Dockerfile.check -t surechigai-linux-check .
+docker build -f Dockerfile.check -t surechigai-linux-check ..
 docker run --rm surechigai-linux-check
 ```
+
+Dockerのビルドコンテキストはリポジトリルート（`..`）です。埋め込みWeb画面とvendor依存も含め、CLIのテスト・ビルド・Clippy・整形チェック、Tab5のホストテストを実行します。
 
 検証状況（2026-09-05）:
 

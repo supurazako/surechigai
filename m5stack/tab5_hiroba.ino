@@ -12,20 +12,20 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
+#include "include/gallery_rotation.hpp"
 
 static const char* WIFI_SSID = "your-hotspot";
 static const char* WIFI_PASS = "your-password";
 static const char* SERVER    = "http://192.168.43.1:8000";  // PC の IP に書き換える
 
 static const uint32_t POLL_MS   = 3000;
-static const uint32_t ROTATE_MS = 10000;
 
 struct Item { int id; String device; String sentence; String image; };
 static Item items[20];
 static int  itemCount = 0;
 static int  shownId   = -1;
-static int  rotateIdx = 0;
-static uint32_t lastPoll = 0, lastRotate = 0;
+static surechigai::GalleryRotation rotation;
+static uint32_t lastPoll = 0;
 
 static int W, H;  // 画面サイズ（横向きで 1280x720 を想定）
 
@@ -71,17 +71,17 @@ static bool fetchLatest() {
 }
 
 // 画像を取ってきて左側 720x720 に描き、右側に文章
-static void show(const Item& it) {
+static bool show(const Item& it) {
   HTTPClient http;
   http.setTimeout(8000);
   http.begin(String(SERVER) + it.image);
   int code = http.GET();
-  if (code != 200) { http.end(); status("画像の取得に失敗 #" + String(it.id)); return; }
+  if (code != 200) { http.end(); status("画像の取得に失敗 #" + String(it.id)); return false; }
   int len = http.getSize();
-  if (len <= 0 || len > 600000) { http.end(); status("画像サイズが変"); return; }
+  if (len <= 0 || len > 600000) { http.end(); status("画像サイズが変"); return false; }
   uint8_t* buf = (uint8_t*)heap_caps_malloc(len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   if (!buf) buf = (uint8_t*)malloc(len);
-  if (!buf) { http.end(); status("メモリ不足"); return; }
+  if (!buf) { http.end(); status("メモリ不足"); return false; }
   WiFiClient* s = http.getStreamPtr();
   int got = 0;
   uint32_t t0 = millis();
@@ -90,6 +90,8 @@ static void show(const Item& it) {
     if (n > 0) got += n; else delay(5);
   }
   http.end();
+
+  if (got != len) { free(buf); status("画像の受信が途中で止まりました"); return false; }
 
   M5.Display.fillScreen(TFT_BLACK);
   int side = H;  // 正方形を画面の高さいっぱいに
@@ -117,6 +119,7 @@ static void show(const Item& it) {
   M5.Display.setCursor(x, H - 80);
   M5.Display.print("#" + String(it.id) + "  " + it.device);
   shownId = it.id;
+  return true;
 }
 
 void setup() {
@@ -141,21 +144,14 @@ void loop() {
   if (now - lastPoll >= POLL_MS) {
     lastPoll = now;
     if (ensureWifi() && fetchLatest()) {
-      if (itemCount > 0 && items[0].id != shownId) {  // 新着を最優先で表示
-        show(items[0]);
-        rotateIdx = 0;
-        lastRotate = now;
-      } else if (itemCount == 0 && shownId < 0) {
+      if (itemCount == 0 && shownId < 0) {
         status("まだ誰も完成していない");
       }
     } else {
       status("サーバに届かない: " + String(SERVER));
     }
   }
-  if (itemCount > 1 && now - lastRotate >= ROTATE_MS) {  // 新着が無ければ順番に
-    lastRotate = now;
-    rotateIdx = (rotateIdx + 1) % itemCount;
-    show(items[rotateIdx]);
-  }
+  const int selected = rotation.select(itemCount > 0 ? items[0].id : -1, itemCount, now);
+  if (selected >= 0 && !show(items[selected])) rotation.failed(millis());
   delay(20);
 }

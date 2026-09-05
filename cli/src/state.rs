@@ -47,6 +47,7 @@ pub struct State {
     cooldown: Duration,
     post_url: Option<String>,
     image_status: post::ImageStatusHandle,
+    posted_round: Option<Uuid>,
 }
 
 impl State {
@@ -71,6 +72,7 @@ impl State {
             cooldown,
             post_url: None,
             image_status: post::new_image_status_handle(),
+            posted_round: None,
         }
     }
 
@@ -82,7 +84,10 @@ impl State {
 
     /// 直近に完成した文章の画像生成状況（Web Viewer表示用）。
     pub fn image_status(&self) -> Option<post::ImageStatus> {
-        self.image_status.lock().ok().and_then(|guard| guard.clone())
+        self.image_status
+            .lock()
+            .ok()
+            .and_then(|guard| guard.as_ref().and_then(|tracked| tracked.status.clone()))
     }
 
     pub fn node(&self) -> Uuid {
@@ -197,13 +202,18 @@ impl State {
         if self.sentence.is_complete() {
             let rendered = self.sentence.render();
             println!("文章完成 round={} 文={:?}", self.sentence.round, rendered);
-            if let Some(url) = &self.post_url {
-                post::spawn_post(
-                    url.clone(),
-                    self.name.clone(),
-                    rendered,
-                    self.image_status.clone(),
-                );
+            // 完成後も交換自体は継続するため、同じroundでの二重送信（＝二重課金）を防ぐ。
+            if self.posted_round != Some(self.sentence.round) {
+                self.posted_round = Some(self.sentence.round);
+                if let Some(url) = &self.post_url {
+                    post::spawn_post(
+                        url.clone(),
+                        self.name.clone(),
+                        rendered,
+                        self.sentence.round,
+                        self.image_status.clone(),
+                    );
+                }
             }
         }
         Ok(())
@@ -679,5 +689,76 @@ mod tests {
                 .write("a", RX, &Packet::Profile(peer).frames(9).unwrap()[0], now)
                 .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn completed_round_posts_once_even_when_exchanges_continue() {
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+            sync::{
+                Arc,
+                atomic::{AtomicUsize, Ordering},
+            },
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let url = format!("http://{}/submit", listener.local_addr().unwrap());
+        let posts = Arc::new(AtomicUsize::new(0));
+        let counted = posts.clone();
+        let server = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(4);
+            while Instant::now() < deadline {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        stream
+                            .set_read_timeout(Some(Duration::from_secs(1)))
+                            .unwrap();
+                        let mut buf = [0; 4096];
+                        let n = stream.read(&mut buf).unwrap();
+                        let body = if String::from_utf8_lossy(&buf[..n]).starts_with("POST") {
+                            counted.fetch_add(1, Ordering::SeqCst);
+                            r#"{"id":1,"status":"queued"}"#
+                        } else {
+                            r#"{"id":1,"status":"done","image":"/image/1.jpg"}"#
+                        };
+                        write!(
+                            stream,
+                            "HTTP/1.0 200 OK\r\nContent-Length: {}\r\n\r\n{}",
+                            body.len(),
+                            body
+                        )
+                        .unwrap();
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(10))
+                    }
+                    Err(error) => panic!("{error}"),
+                }
+            }
+        });
+        let (mut state, peer, now) = fixture();
+        state.set_post_url(Some(url));
+        for slot in Slot::ALL {
+            let sent = state.choose_gift(&peer);
+            let received = GiftPacket {
+                receiver_round: state.sentence.round,
+                gift: Some(Phrase::new(slot, "word".into()).unwrap()),
+            };
+            state.record_exchange(&peer, &sent, &received, now).unwrap();
+        }
+        for _ in 0..3 {
+            let sent = state.choose_gift(&peer);
+            let received = GiftPacket {
+                receiver_round: state.sentence.round,
+                gift: None,
+            };
+            state
+                .record_exchange(&peer, &sent, &received, now + Duration::from_secs(61))
+                .unwrap();
+        }
+        server.join().unwrap();
+        assert_eq!(posts.load(Ordering::SeqCst), 1);
+        assert_eq!(state.image_status().unwrap().status, "done");
     }
 }
