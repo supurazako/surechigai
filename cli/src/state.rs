@@ -74,8 +74,7 @@ impl State {
         }
     }
 
-    /// 文章完成時にPOSTする広場サーバのURL（`server/`の`POST /submit`）を設定する。
-    /// 未設定なら送信しない。
+    /// Web Viewerから手動送信するときに使う広場サーバのURLを設定する。
     pub fn set_post_url(&mut self, post_url: Option<String>) {
         self.post_url = post_url;
     }
@@ -233,16 +232,11 @@ impl State {
             self.sentence.missing_mask().count_ones()
         );
         if !was_complete && self.sentence.is_complete() {
-            let rendered = self.sentence.render();
-            println!("文章完成 round={} 文={:?}", self.sentence.round, rendered);
-            if let Some(url) = &self.post_url {
-                post::spawn_post(
-                    url.clone(),
-                    self.name.clone(),
-                    rendered,
-                    self.image_status.clone(),
-                );
-            }
+            println!(
+                "文章完成 round={} 文={:?}",
+                self.sentence.round,
+                self.sentence.render()
+            );
         }
         Ok(())
     }
@@ -656,6 +650,42 @@ mod tests {
             collecting.sentence.entry(distributed.slot).unwrap().source,
             completed.node
         );
+    }
+
+    #[test]
+    fn completing_sentence_does_not_generate_image_automatically() {
+        let now = Instant::now();
+        let mut state = State::new(
+            Uuid::new_v4(),
+            "local-user".into(),
+            deck("local"),
+            Duration::from_secs(10),
+            Duration::from_secs(30),
+        );
+        state.set_post_url(Some("http://127.0.0.1:9/submit".into()));
+        for slot in Slot::ALL.into_iter().filter(|slot| *slot != Slot::What) {
+            assert!(state.sentence.accept(
+                Uuid::new_v4(),
+                "source".into(),
+                Phrase::new(slot, format!("filled-{}", slot.label())).unwrap(),
+            ));
+        }
+        let peer = Profile {
+            node: Uuid::new_v4(),
+            name: "peer-user".into(),
+            round: Uuid::new_v4(),
+            missing: ALL_MISSING,
+        };
+        let sent = state.choose_gift(&peer);
+        let received = GiftPacket {
+            receiver_round: state.sentence.round,
+            gift: Some(Phrase::new(Slot::What, "歩いた".into()).unwrap()),
+        };
+
+        state.record_exchange(&peer, &sent, &received, now).unwrap();
+
+        assert!(state.sentence.is_complete());
+        assert!(state.image_status().is_none());
     }
 
     #[test]

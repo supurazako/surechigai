@@ -25,6 +25,7 @@ const sentenceOrder = ["when", "how", "who", "where", "why", "what"];
 let initialized = false;
 let requestPending = false;
 let generationPending = false;
+let prefilledRound = null;
 
 function setFormValues(setup) {
   if (initialized || !setup) return;
@@ -82,6 +83,12 @@ function renderSentence(device) {
   progressBar.style.width = `${(count / 6) * 100}%`;
   renderedSentence.textContent = device.rendered || "まだ文節がありません";
   completion.classList.toggle("is-hidden", !device.complete);
+
+  if (device.complete && device.round !== prefilledRound) {
+    const input = generationForm.elements.namedItem("sentence");
+    if (input && !input.value.trim()) input.value = device.rendered;
+    prefilledRound = device.round;
+  }
 }
 
 function renderHistory(device) {
