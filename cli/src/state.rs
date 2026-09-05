@@ -4,7 +4,7 @@ use crate::{
 };
 use anyhow::{Result, bail, ensure};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     time::{Duration, Instant},
 };
 use uuid::Uuid;
@@ -23,6 +23,15 @@ struct Session {
     committed: bool,
 }
 
+#[derive(Clone, Debug)]
+pub struct ExchangeRecord {
+    pub sequence: u64,
+    pub peer_node: Uuid,
+    pub peer_name: String,
+    pub sent: Option<crate::game::Phrase>,
+    pub received: Option<crate::game::Phrase>,
+}
+
 pub struct State {
     node: Uuid,
     name: String,
@@ -31,6 +40,8 @@ pub struct State {
     enabled: bool,
     session: Option<Session>,
     recent: HashMap<Uuid, Instant>,
+    exchanges: VecDeque<ExchangeRecord>,
+    exchange_count: u64,
     timeout: Duration,
     cooldown: Duration,
 }
@@ -51,6 +62,8 @@ impl State {
             enabled: false,
             session: None,
             recent: HashMap::new(),
+            exchanges: VecDeque::new(),
+            exchange_count: 0,
             timeout,
             cooldown,
         }
@@ -62,6 +75,10 @@ impl State {
 
     pub fn sentence(&self) -> &Sentence {
         &self.sentence
+    }
+
+    pub fn exchanges(&self) -> &VecDeque<ExchangeRecord> {
+        &self.exchanges
     }
 
     pub fn profile(&self) -> Profile {
@@ -142,6 +159,15 @@ impl State {
                 "received slot is already filled"
             );
         }
+        self.exchange_count += 1;
+        self.exchanges.push_front(ExchangeRecord {
+            sequence: self.exchange_count,
+            peer_node: peer.node,
+            peer_name: peer.name.clone(),
+            sent: sent.gift.clone(),
+            received: received.gift.clone(),
+        });
+        self.exchanges.truncate(50);
         self.recent.insert(peer.node, now + self.cooldown);
         println!(
             "交換成功 peer={}({}) 配布={} 受取={} 作成中={:?} 残り={}",
@@ -439,6 +465,9 @@ mod tests {
             state.sentence.entry(Slot::Who).unwrap().source_name,
             "peer-user"
         );
+        assert_eq!(state.exchanges.len(), 1);
+        assert_eq!(state.exchanges.front().unwrap().peer_name, "peer-user");
+        assert_eq!(state.exchanges.front().unwrap().sequence, 1);
         // Retrying the final ACK must not extend the cooldown.
         state
             .write(
@@ -448,6 +477,7 @@ mod tests {
                 now + Duration::from_millis(500),
             )
             .unwrap();
+        assert_eq!(state.exchanges.len(), 1);
         assert!(state.cooling_down(peer.node, now + Duration::from_secs(29)));
         assert!(!state.cooling_down(peer.node, now + Duration::from_secs(30)));
         assert!(state.disable_if_idle(now + Duration::from_secs(1)));

@@ -1,0 +1,146 @@
+const setupPanel = document.querySelector("#setup-panel");
+const storyPanel = document.querySelector("#story-panel");
+const historyPanel = document.querySelector("#history-panel");
+const setupForm = document.querySelector("#setup-form");
+const startButton = document.querySelector("#start-button");
+const formError = document.querySelector("#form-error");
+const statusLabel = document.querySelector("#status-label");
+const statusPill = document.querySelector("#status-pill");
+const sentenceGrid = document.querySelector("#sentence-grid");
+const renderedSentence = document.querySelector("#rendered-sentence");
+const receivedCount = document.querySelector("#received-count");
+const progressBar = document.querySelector("#progress-bar");
+const completion = document.querySelector("#completion");
+const exchangeList = document.querySelector("#exchange-list");
+const emptyLog = document.querySelector("#empty-log");
+const deviceId = document.querySelector("#device-id");
+
+const sentenceOrder = ["when", "how", "who", "where", "why", "what"];
+let initialized = false;
+let requestPending = false;
+
+function setFormValues(setup) {
+  if (initialized || !setup) return;
+  for (const [key, value] of Object.entries(setup)) {
+    const input = setupForm.elements.namedItem(key);
+    if (input) input.value = value;
+  }
+  initialized = true;
+}
+
+function statusText(state) {
+  if (state.phase === "setup") return "設定待ち";
+  if (state.phase === "starting") return "起動中";
+  if (state.phase === "stopped") return "停止";
+  return state.role || "動作中";
+}
+
+function renderStatus(state) {
+  statusLabel.textContent = statusText(state);
+  statusPill.dataset.phase = state.phase;
+  if (state.last_error) {
+    statusLabel.textContent = `再試行中: ${state.last_error}`;
+    statusPill.dataset.phase = "error";
+  }
+}
+
+function renderSentence(device) {
+  const byKey = new Map(device.slots.map((slot) => [slot.key, slot]));
+  sentenceGrid.replaceChildren(
+    ...sentenceOrder.map((key, index) => {
+      const slot = byKey.get(key);
+      const item = document.createElement("li");
+      item.className = slot.text ? "fragment is-filled" : "fragment";
+
+      const number = document.createElement("span");
+      number.className = "fragment-number";
+      number.textContent = String(index + 1).padStart(2, "0");
+
+      const body = document.createElement("div");
+      const label = document.createElement("span");
+      label.className = "fragment-label";
+      label.textContent = slot.label;
+      const text = document.createElement("strong");
+      text.textContent = slot.text || "待っています…";
+      const source = document.createElement("small");
+      source.textContent = slot.source_name ? `from ${slot.source_name}` : "未受取";
+      body.append(label, text, source);
+      item.append(number, body);
+      return item;
+    }),
+  );
+
+  const count = 6 - device.missing_count;
+  receivedCount.textContent = String(count);
+  progressBar.style.width = `${(count / 6) * 100}%`;
+  renderedSentence.textContent = device.rendered || "まだ文節がありません";
+  completion.classList.toggle("is-hidden", !device.complete);
+}
+
+function renderHistory(device) {
+  deviceId.textContent = `${device.name} / ID ${device.node.slice(0, 8)}`;
+  emptyLog.classList.toggle("is-hidden", device.exchanges.length > 0);
+  exchangeList.replaceChildren(
+    ...device.exchanges.map((exchange) => {
+      const item = document.createElement("li");
+      const peer = document.createElement("strong");
+      peer.textContent = exchange.peer_name;
+      const details = document.createElement("span");
+      details.textContent = `配布 ${exchange.sent} ／ 受取 ${exchange.received}`;
+      const sequence = document.createElement("small");
+      sequence.textContent = `#${exchange.sequence}`;
+      item.append(peer, details, sequence);
+      return item;
+    }),
+  );
+}
+
+function render(state) {
+  setFormValues(state.setup);
+  renderStatus(state);
+  const running = Boolean(state.device);
+  setupPanel.classList.toggle("is-hidden", state.phase !== "setup");
+  storyPanel.classList.toggle("is-hidden", !running);
+  historyPanel.classList.toggle("is-hidden", !running);
+  if (running) {
+    renderSentence(state.device);
+    renderHistory(state.device);
+  }
+}
+
+async function refresh() {
+  try {
+    const response = await fetch("/api/state", { cache: "no-store" });
+    if (!response.ok) throw new Error(`状態取得に失敗しました (${response.status})`);
+    render(await response.json());
+  } catch (error) {
+    statusLabel.textContent = error.message;
+    statusPill.dataset.phase = "error";
+  }
+}
+
+setupForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (requestPending) return;
+  requestPending = true;
+  startButton.disabled = true;
+  formError.textContent = "";
+  const values = Object.fromEntries(new FormData(setupForm));
+  try {
+    const response = await fetch("/api/start", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(values),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "開始できませんでした");
+    await refresh();
+  } catch (error) {
+    formError.textContent = error.message;
+    startButton.disabled = false;
+    requestPending = false;
+  }
+});
+
+refresh();
+setInterval(refresh, 750);

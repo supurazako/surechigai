@@ -46,6 +46,10 @@ pub struct Config {
     pub drain_secs: u64,
     #[arg(long, default_value_t = 30)]
     pub cooldown_secs: u64,
+    #[arg(long, help = "localhostで設定・閲覧用Web UIを起動")]
+    pub web: bool,
+    #[arg(long, default_value_t = 8787, help = "Web UIの待受ポート")]
+    pub web_port: u16,
 }
 
 impl Config {
@@ -80,6 +84,7 @@ impl Config {
             self.cooldown_secs <= 86400,
             "再交換間隔は0〜86400秒にしてください"
         );
+        ensure!(self.web_port > 0, "Web UIのポートは1〜65535にしてください");
         Ok(())
     }
 
@@ -133,6 +138,8 @@ mod tests {
         assert_eq!(config.role_max_secs, 12);
         assert_eq!(config.exchange_timeout_secs, 5);
         assert_eq!(config.drain_secs, 5);
+        assert!(!config.web);
+        assert_eq!(config.web_port, 8787);
         assert!(config.validate().is_ok());
     }
 
