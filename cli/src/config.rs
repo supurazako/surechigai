@@ -19,9 +19,9 @@ pub struct Config {
     pub role: Role,
     #[arg(long, default_value_t = -65, allow_hyphen_values = true)]
     pub rssi_threshold: i16,
-    #[arg(long, default_value_t = 3)]
+    #[arg(long, default_value_t = 1)]
     pub role_min_secs: u64,
-    #[arg(long, default_value_t = 8)]
+    #[arg(long, default_value_t = 5)]
     pub role_max_secs: u64,
     #[arg(long, default_value_t = 10)]
     pub exchange_timeout_secs: u64,
