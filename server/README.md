@@ -10,10 +10,28 @@
 # PowerShell（Windows 標準）。&& は使えないので 1 行ずつ
 cd server
 python server.py --dry     # API を呼ばずに動作確認（Pillow があれば文字入りの代替画像）
-python server.py           # 本番。OPENAI_API_KEY を環境変数に入れておく
+python server.py           # 本番。OpenAI gpt-image-2 / high。OPENAI_API_KEY を環境変数に入れておく
 python test_server.py      # 口を一通り叩く自動テスト（dry）
 python -m unittest test_api  # 入力検証・HTTPジョブ追跡・生成失敗時の復帰
 ```
+
+### OpenAIで高品質生成
+
+標準設定は`gpt-image-2`・`quality=high`・1024×1024・JPEGです。JPEGの`output_compression`は85に設定しています。ローカル生成から切り替える場合は、実際にサーバーを動かすPCで既存のサーバーを終了してから次で起動します。
+
+```sh
+python server.py --backend openai --model gpt-image-2 --quality high
+```
+
+そのターミナルへ`OPENAI_API_KEY`を設定する必要があります。別のPCや別ターミナルに設定したキーは自動では共有されません。キー未設定時は起動を中止し、SD-Turboへ自動で切り替わることはありません。API利用権限・課金設定も必要です。
+
+キーをコマンド履歴に残さず、そのサーバープロセスだけへ渡す場合は、`server/`で次を実行し、非表示の入力欄へキーを入力できます（ファイルへ保存しません）。
+
+```sh
+python -c "import getpass, os, runpy; os.environ['OPENAI_API_KEY'] = getpass.getpass('OpenAI API key: '); runpy.run_path('server.py', run_name='__main__')"
+```
+
+起動ログに`OpenAI gpt-image-2 quality=high`が表示されることを確認してください。画質優先のためAPI料金と待ち時間は低画質設定より増えます。費用を抑えて比較する場合は`--quality medium`を指定できます。モデルの対応状況は[公式モデル説明](https://developers.openai.com/api/docs/models/gpt-image-2)、料金は[公式料金表](https://developers.openai.com/api/docs/pricing)を参照してください。
 
 ### Apple Siliconでローカル生成
 
@@ -81,7 +99,7 @@ python sim.py --auto 30 --seed 1   # 一気に 30 回すれ違わせて結果を
 5. Mac/LinuxのBLE対応PCで`./target/debug/surechigai --web --post-url http://<サーバーPCのLAN IP>:8000/submit`を起動する。別PCから接続する場合、サーバーPCのファイアウォールで信頼できるLANからの8000番への接続を許可する。
 6. CLIとTab5または別のCLIで6種類を交換し、文章完成→広場の画像→Web Viewerの画像まで確認する。Tab5交換用ファームウェア自身は完成文をPOSTしない。`tab5_hiroba.ino`は別端末の表示専用スケッチ。
 
-画像生成リクエストは[OpenAI Images API](https://developers.openai.com/api/reference/resources/images/methods/generate)へ`gpt-image-1`・1024×1024・JPEG・quality=lowを既定として送ります。自動テストは外部APIを呼ばないため、アカウントの権限・残高・実機BLE通信は上記の実環境確認が必要です。
+画像生成リクエストは[OpenAI Images API](https://developers.openai.com/api/reference/resources/images/methods/generate)へ`gpt-image-2`・1024×1024・JPEG・quality=highを既定として送ります。自動テストは外部APIを呼ばないため、アカウントの権限・残高・実機BLE通信は上記の実環境確認が必要です。
 
 CLIは完成した同一ラウンドを一度だけ投稿し、送信の通信失敗時は最大3回試行します。画像生成自体の失敗を自動再生成はしません。追跡は`/jobs/{id}`を2秒間隔で最大90回行うため、長い順番待ちではViewerが`timeout`になってもサーバーが生成を続けている場合があります。`GET /jobs/{id}`または広場ページで確認できます。サーバー再起動時、処理途中だったジョブは`error`となります。
 

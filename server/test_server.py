@@ -27,7 +27,7 @@ BASE = f"http://127.0.0.1:{PORT}"
 def test_generators() -> None:
     assert isinstance(app.make_generator("dry", "low", None, 1), app.DryGenerator)
     remote = app.make_generator("openai", "medium", None, 1)
-    assert remote.label == "OpenAI gpt-image-1 quality=medium"
+    assert remote.label == "OpenAI gpt-image-2 quality=medium"
 
     with mock.patch.object(app.platform, "system", return_value="Linux"):
         try:

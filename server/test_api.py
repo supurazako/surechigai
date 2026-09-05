@@ -83,10 +83,29 @@ class ApiTests(unittest.TestCase):
             body = json.loads(request.data)
             self.assertEqual(body, {"model": "gpt-image-1", "prompt": "hello", "n": 1,
                                    "size": "1024x1024", "quality": "low",
-                                   "output_format": "jpeg", "output_compression": 60})
+                                   "output_format": "jpeg", "output_compression": 85})
             return io.BytesIO(json.dumps({"data": [{"b64_json": base64.b64encode(jpeg).decode()}]}).encode())
         with patch.dict(app.os.environ, {"OPENAI_API_KEY": "test-only"}), patch.object(app.urllib.request, "urlopen", side_effect=respond):
             self.assertEqual(app.gen_openai("hello", "low", "gpt-image-1"), jpeg)
+
+    def test_default_startup_generates_with_high_quality_openai_model(self):
+        args = app.parse_args([])
+        generator = app.make_generator(args.backend, args.quality, args.model, args.steps)
+        def respond(request, timeout):
+            body = json.loads(request.data)
+            self.assertEqual(body["model"], "gpt-image-2")
+            self.assertEqual(body["quality"], "high")
+            self.assertEqual(body["size"], "1024x1024")
+            self.assertEqual(body["output_compression"], 85)
+            self.assertIn("犬が踊る", body["prompt"])
+            return io.BytesIO(b'{"data":[{"b64_json":"/9j/2Q=="}]}')
+        with patch.dict(app.os.environ, {"OPENAI_API_KEY": "test-only"}), patch.object(app.urllib.request, "urlopen", side_effect=respond):
+            self.assertEqual(generator.generate("犬が踊る"), b"\xff\xd8\xff\xd9")
+
+    def test_openai_startup_requires_key(self):
+        with patch.dict(app.os.environ, {"OPENAI_API_KEY": ""}), patch("sys.argv", ["server.py"]):
+            with self.assertRaisesRegex(SystemExit, "OPENAI_API_KEY が未設定"):
+                app.main()
 
     def test_worker_reports_failure_and_processes_next_job(self):
         class Generator:
