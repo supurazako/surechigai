@@ -5,8 +5,8 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1"
-ble-peripheral-rust = "0.2"
-btleplug = "0.13"
+ble-peripheral-rust = { path = "vendor/ble-peripheral-rust" }
+btleplug = { path = "vendor/btleplug" }
 clap = { version = "4", features = ["derive"] }
 rand = "0.8"
 tokio = { version = "1", features = ["full"] }
