@@ -51,6 +51,18 @@ PC B:
 
 Ctrl+CまたはSIGTERMで終了します。自分が開始したスキャン・広告・接続を終了処理で停止します。
 
+### Web Viewer
+
+端末ごとの設定と文章表示をブラウザで行う場合は、`--web` を付けます。
+
+```sh
+./target/debug/surechigai --web
+```
+
+起動後に `http://127.0.0.1:8787` を開き、ユーザー名と配布する6文節を入力して「交換を開始」を押してください。設定が確定するまでBLEは初期化されません。開始後は作成中文章、各文節の提供者、BLE役割、直近50件の交換履歴が自動更新されます。
+
+画面はlocalhostだけで公開され、外部サーバーへ情報を送信しません。静的ファイルはバイナリに埋め込まれるため、配布時に `web/` ディレクトリをバイナリと一緒に置く必要はありません。ポートを変える場合は、例えば `--web --web-port 9000` と指定します。
+
 ### macOS
 
 - Xcode Command Line Toolsが必要です。未導入なら `xcode-select --install` で導入します。
@@ -98,6 +110,8 @@ Docker DesktopのコンテナではホストMacのBluetoothをそのまま使え
 | `--exchange-timeout-secs` | `5` | 1回の交換の制限時間 |
 | `--drain-secs` | `5` | Peripheral広告停止後、探索中だった接続を受け付ける時間 |
 | `--cooldown-secs` | `30` | 同じ相手と再交換するまでの時間。`0`で抑制なし |
+| `--web` | 無効 | localhostで設定・端末別Viewerを起動し、画面で開始する |
+| `--web-port` | `8787` | Web Viewerの待受ポート |
 
 初期役割と次の役割は、端末ごとにCentral/Peripheralを50:50で独立抽選します。8〜12秒後の抽選で同じ役割になった場合は、広告やスキャンを再起動せず継続時間だけ延長します。異なる役割になった場合にだけ切り替えます。
 PeripheralからCentralへ移る前には広告を停止して5秒間待機し、すでに探索を始めていた相手との交換を完了させます。交換中はタイマーより交換を優先します。
@@ -136,7 +150,7 @@ RSSIは距離ではありません。壁、端末の向き、アンテナなど�
 ```sh
 cargo test --locked
 cargo clippy --locked --all-targets -- -D warnings
-cargo fmt --all -- --check
+cargo fmt --package surechigai -- --check
 ```
 
 Linux向けのコンパイルと自動テスト:
@@ -154,7 +168,7 @@ docker run --rm surechigai-linux-check
 
 ## 構成と通信仕様
 
-`src/ble.rs` がBLE入出力、`src/game.rs` が配布デッキと作成中の文章、`src/state.rs` が交換状態と再交換抑制、`src/protocol.rs` がフレーム処理を担当します。
+`src/ble.rs` がBLE入出力、`src/game.rs` が配布デッキと作成中の文章、`src/state.rs` が交換状態と再交換抑制、`src/protocol.rs` がフレーム処理、`src/web.rs` と `../web/` がlocalhost APIと画面を担当します。
 接続側は `btleplug 0.13`、待受側は `ble-peripheral-rust 0.2` を使用しています。`vendor/` に置いたソースを参照し、CoreBluetoothの遅延探索通知とBlueZのGATTライフサイクルに局所パッチを適用しています。内容は `vendor/PATCHES.md` を参照してください。
 
 Service UUIDは `478f5400-73ad-47a6-a131-562697033a90` です。

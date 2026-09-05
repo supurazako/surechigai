@@ -7,6 +7,7 @@ fn help_and_invalid_input_do_not_initialize_bluetooth() {
     assert!(help.status.success());
     assert!(String::from_utf8_lossy(&help.stdout).contains("--rssi-threshold"));
     assert!(String::from_utf8_lossy(&help.stdout).contains("--who"));
+    assert!(String::from_utf8_lossy(&help.stdout).contains("--web-port"));
 
     for args in [
         vec!["--who".to_string(), "あ".repeat(22)],

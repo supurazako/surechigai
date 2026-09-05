@@ -28,6 +28,7 @@ use surechigai::{
     config::{Config, Role, random_role, rssi_allowed},
     protocol::{self, ACK, Assembler, INFO, Packet, RX, SELECT, SERVICE, TX},
     state::State,
+    web::ViewerHandle,
 };
 use tokio::{
     sync::mpsc,
@@ -48,10 +49,11 @@ pub struct Radio {
     connected: Option<Peripheral>,
     known_peers: HashMap<String, Uuid>,
     scanning: bool,
+    viewer: Option<ViewerHandle>,
 }
 
 impl Radio {
-    pub fn new(config: Config) -> Result<Self> {
+    pub fn with_viewer(config: Config, viewer: Option<ViewerHandle>) -> Result<Self> {
         let node = Uuid::new_v4();
         let deck = config.deck()?;
         println!(
@@ -73,6 +75,9 @@ impl Radio {
             Duration::from_secs(config.exchange_timeout_secs),
             Duration::from_secs(config.cooldown_secs),
         )));
+        if let Some(viewer) = &viewer {
+            viewer.attach_state(state.clone());
+        }
         Ok(Self {
             config,
             state,
@@ -82,6 +87,7 @@ impl Radio {
             connected: None,
             known_peers: HashMap::new(),
             scanning: false,
+            viewer,
         })
     }
 
@@ -137,6 +143,7 @@ impl Radio {
     }
 
     pub async fn run(&mut self) -> Result<()> {
+        self.report_role("初期化中");
         timeout(Duration::from_secs(20), self.initialize())
             .await
             .context(
@@ -167,6 +174,9 @@ impl Radio {
                 Role::Auto => unreachable!(),
             };
             if let Err(error) = result {
+                if let Some(viewer) = &self.viewer {
+                    viewer.set_error(format!("{error:#}"));
+                }
                 eprintln!("通信失敗: {error:#}（役割を切り替えて再試行します）");
                 // Do not start another role until previous radio operations are stopped.
                 self.stop_activity().await?;
@@ -180,6 +190,7 @@ impl Radio {
     }
 
     async fn peripheral_forever(&mut self) -> Result<()> {
+        self.report_role("Peripheral");
         self.start_peripheral().await?;
         println!("役割=Peripheral 固定");
         loop {
@@ -193,6 +204,7 @@ impl Radio {
     }
 
     async fn central_forever(&mut self) -> Result<()> {
+        self.report_role("Central");
         println!("役割=Central 固定");
         loop {
             self.central_slot(Duration::from_secs(3600)).await?;
@@ -212,6 +224,7 @@ impl Radio {
     }
 
     async fn peripheral_slot(&mut self, duration: Duration) -> Result<()> {
+        self.report_role("Peripheral");
         self.start_peripheral().await?;
         sleep(duration).await;
         // The vendored Linux backend stops only the advertisement. The GATT
@@ -219,6 +232,7 @@ impl Radio {
         stop_advertising(self.server.as_mut().unwrap()).await?;
         let drain = Duration::from_secs(self.config.drain_secs);
         if !drain.is_zero() {
+            self.report_role("Drain");
             println!("役割遷移=Drain 継続時間={}秒", drain.as_secs());
             sleep(drain).await;
         }
@@ -232,6 +246,7 @@ impl Radio {
     }
 
     async fn central_slot(&mut self, duration: Duration) -> Result<()> {
+        self.report_role("Central");
         let deadline = Instant::now() + duration;
         let limit = Duration::from_secs(self.config.exchange_timeout_secs);
         let mut attempted = HashSet::new();
@@ -411,12 +426,21 @@ impl Radio {
     }
 
     pub async fn cleanup(&mut self) -> Result<()> {
+        if let Some(viewer) = &self.viewer {
+            viewer.set_stopped();
+        }
         let result = self.stop_activity().await;
         if let Some(task) = self.events.take() {
             task.abort();
             let _ = task.await;
         }
         result
+    }
+
+    fn report_role(&self, role: &str) {
+        if let Some(viewer) = &self.viewer {
+            viewer.set_role(role);
+        }
     }
 }
 
