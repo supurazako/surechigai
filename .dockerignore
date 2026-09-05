@@ -1,0 +1,9 @@
+*
+!Cargo.toml
+!Cargo.lock
+!build.rs
+!Info.plist
+!src/
+!src/**
+!tests/
+!tests/**

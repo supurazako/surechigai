@@ -1,0 +1,8 @@
+FROM rust:1.97-bookworm
+RUN apt-get update && apt-get install -y --no-install-recommends libdbus-1-dev pkg-config
+WORKDIR /app
+COPY Cargo.toml Cargo.lock build.rs Info.plist ./
+COPY src ./src
+COPY tests ./tests
+RUN cargo test --locked && cargo build --locked
+CMD ["/app/target/debug/surechigai", "--help"]
