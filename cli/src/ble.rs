@@ -151,10 +151,9 @@ impl Radio {
                 Role::Auto => unreachable!(),
             };
             if let Err(error) = result {
-                eprintln!("通信失敗: {error:#}");
+                eprintln!("通信失敗: {error:#}（役割を切り替えて再試行します）");
                 // Do not start another role until previous radio operations are stopped.
                 self.stop_activity().await?;
-                sleep(self.config.slot_duration()).await;
             }
             if self.config.role == Role::Auto {
                 role = if role == Role::Central {
@@ -242,16 +241,18 @@ impl Radio {
                         .cooling_down(*node, Instant::now())
                 });
                 if logged.insert((id.to_string(), properties.rssi)) {
+                    let decision = if properties.rssi.is_none() {
+                        "見送り（BlueZキャッシュ。最新の広告とRSSIを待機）"
+                    } else if cooling_down {
+                        "見送り（再交換待ち）"
+                    } else if allowed {
+                        "接続候補"
+                    } else {
+                        "見送り（RSSI閾値未満）"
+                    };
                     println!(
                         "発見 device={id} RSSI={:?}dBm {}",
-                        properties.rssi,
-                        if cooling_down {
-                            "見送り（再交換待ち）"
-                        } else if allowed {
-                            "接続候補"
-                        } else {
-                            "見送り（閾値未満またはRSSI不明）"
-                        }
+                        properties.rssi, decision
                     );
                 }
                 if allowed && !cooling_down {
@@ -279,11 +280,15 @@ impl Radio {
     }
 
     async fn disconnect(&mut self) -> Result<()> {
-        if let Some(peer) = self.connected.as_ref() {
-            timeout(Duration::from_secs(3), peer.disconnect())
-                .await
-                .context("切断タイムアウト")??;
-            self.connected = None;
+        if let Some(peer) = self.connected.take() {
+            // A refused connection never became connected. BlueZ reports an
+            // additional error if Disconnect is called in that state, hiding
+            // the useful connection error from the caller.
+            if peer.is_connected().await.unwrap_or(true) {
+                timeout(Duration::from_secs(3), peer.disconnect())
+                    .await
+                    .context("切断タイムアウト")??;
+            }
         }
         Ok(())
     }
