@@ -25,7 +25,7 @@ use std::{
 };
 use surechigai::{
     config::{Config, Role, rssi_allowed},
-    protocol::{self, ACK, Assembler, INFO, Message, RX, SELECT, SERVICE, TX},
+    protocol::{self, ACK, Assembler, INFO, Packet, RX, SELECT, SERVICE, TX},
     state::State,
 };
 use tokio::{
@@ -50,21 +50,29 @@ pub struct Radio {
 }
 
 impl Radio {
-    pub fn new(config: Config) -> Self {
-        let own = Message {
-            node: Uuid::new_v4(),
-            text: config.message.clone(),
-        };
+    pub fn new(config: Config) -> Result<Self> {
+        let node = Uuid::new_v4();
+        let deck = config.deck()?;
         println!(
-            "自分のID={} メッセージ={:?} RSSI閾値={}dBm",
-            own.node, own.text, config.rssi_threshold
+            "ユーザー={} 自分のID={} 配布=[いつ:{:?}, どこで:{:?}, だれが:{:?}, なにをする:{:?}, なぜ:{:?}, どのように:{:?}] RSSI閾値={}dBm",
+            config.name,
+            node,
+            config.when,
+            config.r#where,
+            config.who,
+            config.what,
+            config.why,
+            config.how,
+            config.rssi_threshold
         );
         let state = Arc::new(Mutex::new(State::new(
-            own,
+            node,
+            config.name.clone(),
+            deck,
             Duration::from_secs(config.exchange_timeout_secs),
             Duration::from_secs(config.cooldown_secs),
         )));
-        Self {
+        Ok(Self {
             config,
             state,
             adapter: None,
@@ -73,7 +81,7 @@ impl Radio {
             connected: None,
             known_peers: HashMap::new(),
             scanning: false,
-        }
+        })
     }
 
     async fn initialize(&mut self) -> Result<()> {
@@ -434,41 +442,89 @@ async fn exchange(peer: &Peripheral, state: SharedState) -> Result<Uuid> {
     let rx = characteristic(peer, RX, CharPropFlags::WRITE)?;
     let tx = characteristic(peer, TX, CharPropFlags::READ)?;
     let node = protocol::parse_identity(&peer.read(&info).await?)?;
-    let own = {
+    let own_profile = {
         let state = state.lock().unwrap();
-        ensure!(node != state.own.node, "自分自身への接続です");
+        ensure!(node != state.node(), "自分自身への接続です");
         if state.cooling_down(node, Instant::now()) {
             println!("見送り peer={node}（再交換待ち）");
             return Ok(node);
         }
-        state.own.clone()
+        state.profile()
     };
     let exchange = rand::random::<u32>();
     println!("交換開始 role=central peer={node} exchange={exchange:08x}");
-    for frame in own.frames(exchange)? {
-        peer.write(&rx, &frame, WriteType::WithResponse)
-            .await
-            .context("メッセージ書込に失敗")?;
+    write_packet(peer, &rx, Packet::Profile(own_profile.clone()), exchange)
+        .await
+        .context("Profile書込に失敗")?;
+    let Packet::Profile(peer_profile) = read_packet(peer, &rx, &tx, exchange)
+        .await
+        .context("Profile返信読出に失敗")?
+    else {
+        bail!("Profileではない返信を受信しました")
+    };
+    ensure!(peer_profile.node == node, "相手IDが交換途中で変わりました");
+
+    let sent = state.lock().unwrap().choose_gift(&peer_profile);
+    write_packet(peer, &rx, Packet::Gift(sent.clone()), exchange)
+        .await
+        .context("Gift書込に失敗")?;
+    let Packet::Gift(received) = read_packet(peer, &rx, &tx, exchange)
+        .await
+        .context("Gift返信読出に失敗")?
+    else {
+        bail!("Giftではない返信を受信しました")
+    };
+    ensure!(
+        received.receiver_round == own_profile.round,
+        "受け取ったGiftが別の文章を対象にしています"
+    );
+    if let Some(phrase) = &received.gift {
+        ensure!(
+            own_profile.missing & phrase.slot.bit() != 0,
+            "既に所持している種類のGiftです"
+        );
     }
+    peer.write(
+        &rx,
+        &protocol::command(ACK, exchange),
+        WriteType::WithResponse,
+    )
+    .await
+    .context("受信確認に失敗")?;
+    state
+        .lock()
+        .unwrap()
+        .record_exchange(&peer_profile, &sent, &received, Instant::now())?;
+    Ok(node)
+}
+
+async fn write_packet(
+    peer: &Peripheral,
+    rx: &Characteristic,
+    packet: Packet,
+    exchange: u32,
+) -> Result<()> {
+    for frame in packet.frames(exchange)? {
+        peer.write(rx, &frame, WriteType::WithResponse).await?;
+    }
+    Ok(())
+}
+
+async fn read_packet(
+    peer: &Peripheral,
+    rx: &Characteristic,
+    tx: &Characteristic,
+    exchange: u32,
+) -> Result<Packet> {
     let mut assembler = Assembler::default();
-    // A 146-byte envelope occupies at most 13 frames (12 payload bytes each).
-    for index in 0..13 {
+    for index in 0..protocol::MAX_FRAMES {
         let mut select = protocol::command(SELECT, exchange);
-        select.push(index);
-        peer.write(&rx, &select, WriteType::WithResponse).await?;
-        let frame = peer.read(&tx).await.context("返信読出に失敗")?;
+        select.push(index as u8);
+        peer.write(rx, &select, WriteType::WithResponse).await?;
+        let frame = peer.read(tx).await?;
         protocol::require_exchange(&frame, exchange)?;
-        if let Some(message) = assembler.push(&frame)? {
-            ensure!(message.node == node, "相手IDが交換途中で変わりました");
-            peer.write(
-                &rx,
-                &protocol::command(ACK, exchange),
-                WriteType::WithResponse,
-            )
-            .await
-            .context("受信確認に失敗")?;
-            state.lock().unwrap().record(&message, Instant::now());
-            return Ok(node);
+        if let Some(packet) = assembler.push(&frame)? {
+            return Ok(packet);
         }
     }
     bail!("返信のフレーム数が上限を超えました")

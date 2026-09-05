@@ -5,7 +5,7 @@
     <key>CFBundleIdentifier</key><string>dev.surechigai.cli</string>
     <key>CFBundleName</key><string>surechigai</string>
     <key>NSBluetoothAlwaysUsageDescription</key>
-    <string>近くの端末とBLEでメッセージを交換するためにBluetoothを使用します。</string>
+    <string>近くの端末とBLEで5W1Hの文節を交換するためにBluetoothを使用します。</string>
     <key>NSBluetoothPeripheralUsageDescription</key>
     <string>近くの端末からのBLE接続を待ち受けます。</string>
 </dict>
