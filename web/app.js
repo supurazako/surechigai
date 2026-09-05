@@ -17,10 +17,14 @@ const deviceId = document.querySelector("#device-id");
 const imagePanel = document.querySelector("#image-panel");
 const imageStatusLabel = document.querySelector("#image-status-label");
 const imagePreview = document.querySelector("#image-preview");
+const generationForm = document.querySelector("#generation-form");
+const generateButton = document.querySelector("#generate-button");
+const generationMessage = document.querySelector("#generation-message");
 
 const sentenceOrder = ["when", "how", "who", "where", "why", "what"];
 let initialized = false;
 let requestPending = false;
+let generationPending = false;
 
 function setFormValues(setup) {
   if (initialized || !setup) return;
@@ -109,6 +113,14 @@ const imageStatusText = {
 };
 
 function renderImage(device) {
+  generateButton.disabled =
+    generationPending ||
+    device.image_generation_busy ||
+    !device.image_generation_enabled;
+  if (!device.image_generation_enabled && !generationPending) {
+    generationMessage.textContent =
+      "画像生成を使うにはCLIを --post-url 付きで起動してください。";
+  }
   if (!device.image_status) {
     imagePanel.classList.add("is-hidden");
     return;
@@ -169,6 +181,30 @@ setupForm.addEventListener("submit", async (event) => {
     formError.textContent = error.message;
     startButton.disabled = false;
     requestPending = false;
+  }
+});
+
+generationForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (generationPending) return;
+  generationPending = true;
+  generateButton.disabled = true;
+  generationMessage.textContent = "画像生成サーバへ送信しています…";
+  const values = Object.fromEntries(new FormData(generationForm));
+  try {
+    const response = await fetch("/api/generate", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(values),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "画像生成を開始できませんでした");
+    generationMessage.textContent = "受け付けました。生成完了までお待ちください。";
+  } catch (error) {
+    generationMessage.textContent = error.message;
+  } finally {
+    generationPending = false;
+    await refresh();
   }
 });
 

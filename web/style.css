@@ -45,7 +45,8 @@ body {
 }
 
 button,
-input {
+input,
+textarea {
   font: inherit;
 }
 
@@ -300,7 +301,8 @@ button {
   line-height: 16px;
 }
 
-.outlined-field input {
+.outlined-field input,
+.outlined-field textarea {
   width: 100%;
   min-height: 56px;
   padding: 14px 16px;
@@ -312,11 +314,13 @@ button {
   transition: border-color 150ms ease, box-shadow 150ms ease;
 }
 
-.outlined-field input:hover {
+.outlined-field input:hover,
+.outlined-field textarea:hover {
   border-color: var(--on-surface);
 }
 
-.outlined-field input:focus {
+.outlined-field input:focus,
+.outlined-field textarea:focus {
   border-color: var(--primary);
   box-shadow: 0 0 0 1px var(--primary);
 }
@@ -495,6 +499,50 @@ button {
   font-weight: 700;
 }
 
+.generation-panel {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.7fr) minmax(280px, 1.3fr);
+  gap: 24px;
+  margin-top: 24px;
+  padding: 24px;
+  border-radius: 20px;
+  background: var(--surface-container);
+}
+
+.generation-panel h3,
+.generation-panel p {
+  margin: 0;
+}
+
+.generation-panel h3 {
+  font-size: 18px;
+}
+
+.generation-panel > div > p:last-child {
+  margin-top: 6px;
+  color: var(--on-surface-variant);
+  font-size: 13px;
+}
+
+.generation-field textarea {
+  min-height: 96px;
+  line-height: 1.6;
+  resize: vertical;
+}
+
+.generation-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 12px;
+}
+
+#generation-message {
+  color: var(--on-surface-variant);
+  font-size: 13px;
+}
+
 .image-panel {
   margin: 16px 0 0;
 }
@@ -607,8 +655,14 @@ button {
   }
 
   .phrase-grid,
-  .sentence-grid {
+  .sentence-grid,
+  .generation-panel {
     grid-template-columns: 1fr;
+  }
+
+  .generation-actions {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .form-footer {

@@ -98,7 +98,7 @@ fn request(parsed: &ParsedUrl, method: &str, body: Option<&str>) -> std::io::Res
             method = method,
             path = parsed.path,
             host = parsed.host,
-            len = body.as_bytes().len(),
+            len = body.len(),
             body = body,
         ),
         None => format!(
@@ -224,6 +224,7 @@ fn track_blocking(post_url: &str, device: &str, sentence: &str, handle: &ImageSt
 /// 完成した文章を広場サーバへ非同期にPOSTし、画像生成の完了までポーリングして
 /// `handle` に反映する。エラーはログに出すだけで交換処理は止めない。
 pub fn spawn_post(post_url: String, device: String, sentence: String, handle: ImageStatusHandle) {
+    update(&handle, "送信中", None);
     tokio::task::spawn_blocking(move || {
         track_blocking(&post_url, &device, &sentence, &handle);
     });

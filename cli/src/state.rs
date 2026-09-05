@@ -82,7 +82,44 @@ impl State {
 
     /// 直近に完成した文章の画像生成状況（Web Viewer表示用）。
     pub fn image_status(&self) -> Option<post::ImageStatus> {
-        self.image_status.lock().ok().and_then(|guard| guard.clone())
+        self.image_status
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone())
+    }
+
+    /// Web Viewerから入力された文章の画像生成を開始する。
+    pub fn request_image(&self, sentence: &str) -> Result<()> {
+        let sentence = sentence.trim();
+        ensure!(!sentence.is_empty(), "文章を入力してください");
+        ensure!(
+            sentence.chars().count() <= 200,
+            "文章は200文字以内にしてください"
+        );
+        ensure!(
+            !self.image_generation_busy(),
+            "画像を生成中です。完了してから再度お試しください"
+        );
+        let post_url = self
+            .post_url
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("画像生成には --post-url の指定が必要です"))?;
+        post::spawn_post(
+            post_url.clone(),
+            self.name.clone(),
+            sentence.to_string(),
+            self.image_status.clone(),
+        );
+        Ok(())
+    }
+
+    pub fn image_generation_enabled(&self) -> bool {
+        self.post_url.is_some()
+    }
+
+    pub fn image_generation_busy(&self) -> bool {
+        self.image_status()
+            .is_some_and(|status| matches!(status.status.as_str(), "送信中" | "queued" | "working"))
     }
 
     pub fn node(&self) -> Uuid {
