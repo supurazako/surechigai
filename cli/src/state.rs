@@ -501,6 +501,64 @@ mod tests {
     }
 
     #[test]
+    fn completed_device_keeps_giving_without_receiving() {
+        let now = Instant::now();
+        let mut completed = State::new(
+            Uuid::new_v4(),
+            "completed".into(),
+            deck("completed"),
+            Duration::from_secs(10),
+            Duration::from_secs(30),
+        );
+        for slot in Slot::ALL {
+            assert!(completed.sentence.accept(
+                Uuid::new_v4(),
+                "source".into(),
+                Phrase::new(slot, format!("filled-{}", slot.label())).unwrap(),
+            ));
+        }
+        let mut collecting = State::new(
+            Uuid::new_v4(),
+            "collecting".into(),
+            deck("collecting"),
+            Duration::from_secs(10),
+            Duration::from_secs(30),
+        );
+
+        let completed_profile = completed.profile();
+        let collecting_profile = collecting.profile();
+        assert_eq!(completed_profile.missing, 0);
+        let completed_to_collecting = completed.choose_gift(&collecting_profile);
+        let collecting_to_completed = collecting.choose_gift(&completed_profile);
+        let distributed = completed_to_collecting.gift.clone().unwrap();
+        assert!(collecting_to_completed.gift.is_none());
+
+        completed
+            .record_exchange(
+                &collecting_profile,
+                &completed_to_collecting,
+                &collecting_to_completed,
+                now,
+            )
+            .unwrap();
+        collecting
+            .record_exchange(
+                &completed_profile,
+                &collecting_to_completed,
+                &completed_to_collecting,
+                now,
+            )
+            .unwrap();
+
+        assert!(completed.sentence.is_complete());
+        assert_eq!(collecting.sentence.missing_mask().count_ones(), 5);
+        assert_eq!(
+            collecting.sentence.entry(distributed.slot).unwrap().source,
+            completed.node
+        );
+    }
+
+    #[test]
     fn lease_blocks_role_change_and_other_clients_until_timeout() {
         let (mut state, peer, now) = fixture();
         let frames = Packet::Profile(peer).frames(9).unwrap();
