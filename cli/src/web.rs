@@ -286,6 +286,8 @@ struct DeviceView {
     missing_count: u32,
     slots: Vec<SlotView>,
     exchanges: Vec<ExchangeView>,
+    image_status: Option<String>,
+    image_url: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -321,6 +323,7 @@ fn snapshot(viewer: &ViewerHandle) -> ViewerResponse {
         let state = state.lock().unwrap();
         let profile = state.profile();
         let sentence = state.sentence();
+        let image_status = state.image_status();
         DeviceView {
             node: state.node().to_string(),
             name: profile.name,
@@ -352,6 +355,8 @@ fn snapshot(viewer: &ViewerHandle) -> ViewerResponse {
                     received: phrase_label(exchange.received.as_ref()),
                 })
                 .collect(),
+            image_status: image_status.as_ref().map(|s| s.status.clone()),
+            image_url: image_status.and_then(|s| s.image_url),
         }
     });
     ViewerResponse {

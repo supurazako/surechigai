@@ -1,5 +1,6 @@
 use crate::{
     game::{Deck, Sentence},
+    post,
     protocol::{self, ACK, Assembler, DATA, GiftPacket, INFO, Packet, Profile, RX, SELECT, TX},
 };
 use anyhow::{Result, bail, ensure};
@@ -44,6 +45,8 @@ pub struct State {
     exchange_count: u64,
     timeout: Duration,
     cooldown: Duration,
+    post_url: Option<String>,
+    image_status: post::ImageStatusHandle,
 }
 
 impl State {
@@ -66,7 +69,20 @@ impl State {
             exchange_count: 0,
             timeout,
             cooldown,
+            post_url: None,
+            image_status: post::new_image_status_handle(),
         }
+    }
+
+    /// 文章完成時にPOSTする広場サーバのURL（`server/`の`POST /submit`）を設定する。
+    /// 未設定なら送信しない。
+    pub fn set_post_url(&mut self, post_url: Option<String>) {
+        self.post_url = post_url;
+    }
+
+    /// 直近に完成した文章の画像生成状況（Web Viewer表示用）。
+    pub fn image_status(&self) -> Option<post::ImageStatus> {
+        self.image_status.lock().ok().and_then(|guard| guard.clone())
     }
 
     pub fn node(&self) -> Uuid {
@@ -179,11 +195,16 @@ impl State {
             self.sentence.missing_mask().count_ones()
         );
         if self.sentence.is_complete() {
-            println!(
-                "文章完成 round={} 文={:?}",
-                self.sentence.round,
-                self.sentence.render()
-            );
+            let rendered = self.sentence.render();
+            println!("文章完成 round={} 文={:?}", self.sentence.round, rendered);
+            if let Some(url) = &self.post_url {
+                post::spawn_post(
+                    url.clone(),
+                    self.name.clone(),
+                    rendered,
+                    self.image_status.clone(),
+                );
+            }
         }
         Ok(())
     }

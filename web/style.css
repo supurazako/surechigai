@@ -495,6 +495,25 @@ button {
   font-weight: 700;
 }
 
+.image-panel {
+  margin: 16px 0 0;
+}
+
+.image-panel p {
+  margin: 0 0 8px;
+  color: var(--on-surface-variant);
+  font-size: 13px;
+}
+
+#image-preview {
+  width: 100%;
+  max-width: 320px;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: 12px;
+  display: block;
+}
+
 #device-id {
   max-width: 360px;
   color: var(--on-surface-variant);
