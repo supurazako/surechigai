@@ -295,6 +295,16 @@ GALLERY_HTML = """<!doctype html>
   body{margin:0;background:#111;color:#eee;font-family:"Hiragino Sans","Yu Gothic UI","Noto Sans JP",system-ui,sans-serif}
   header{padding:14px 22px;font-size:18px;letter-spacing:.1em;border-bottom:1px solid #333;display:flex;justify-content:space-between}
   header small{color:#888;letter-spacing:0}
+  .creator{margin:22px;padding:18px;border:1px solid #333;border-radius:12px;background:#1b1b1b}
+  .creator h2{margin:0 0 4px;font-size:17px}
+  .creator>p{margin:0 0 14px;color:#888;font-size:12px}
+  .creator form{display:grid;grid-template-columns:minmax(120px,180px) minmax(240px,1fr) auto;gap:12px;align-items:end}
+  .creator label{display:grid;gap:5px;color:#aaa;font-size:12px}
+  .creator input,.creator textarea{width:100%;min-height:44px;padding:10px 12px;border:1px solid #444;border-radius:8px;box-sizing:border-box;color:#eee;background:#111;font:inherit;resize:vertical}
+  .creator input:focus,.creator textarea:focus{border-color:#b9a6ff;outline:2px solid #6750a4}
+  .creator button{min-height:44px;padding:0 18px;border:0;border-radius:999px;color:#fff;background:#6750a4;font:inherit;font-weight:700;cursor:pointer}
+  .creator button:disabled{opacity:.5;cursor:wait}
+  #submit-message{min-height:20px;margin:10px 0 0;color:#b9f6ca;font-size:12px}
   #hero{display:grid;grid-template-columns:min(58vh,560px) 1fr;gap:28px;padding:26px 22px;align-items:center}
   #hero img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:12px;background:#222}
   #hero .s{font-size:clamp(22px,3.2vw,40px);line-height:1.6;letter-spacing:.04em}
@@ -305,14 +315,35 @@ GALLERY_HTML = """<!doctype html>
   .card .ph{display:flex;align-items:center;justify-content:center;color:#777;font-size:13px}
   .card p{margin:0;padding:8px 10px;font-size:12px;line-height:1.5;color:#ccc}
   .empty{padding:60px 22px;color:#777;text-align:center}
+  @media(max-width:720px){.creator form{grid-template-columns:1fr}.creator button{width:100%}#hero{grid-template-columns:1fr}}
 </style></head><body>
 <header><span>すれ違い広場</span><small id="st"></small></header>
+<section class="creator">
+  <h2>文章から画像をつくる</h2>
+  <p>起動中の画像生成バックエンドへ手動で追加します。</p>
+  <form id="generate-form">
+    <label>端末名<input name="device" value="web" maxlength="32" required></label>
+    <label>完成した文章<textarea name="sentence" rows="2" maxlength="200" placeholder="ある日　犬が　パリで…" required></textarea></label>
+    <button type="submit" id="generate-button">画像を生成</button>
+  </form>
+  <p id="submit-message" role="status" aria-live="polite"></p>
+</section>
 <div id="hero" hidden><img id="hi" alt=""><div><div class="s" id="hs"></div><div class="d" id="hd"></div></div></div>
 <div id="grid"></div>
 <div class="empty" id="empty">まだ誰も完成していない</div>
 <script>
 let lastLatest=null;
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+document.getElementById('generate-form').addEventListener('submit',async e=>{
+  e.preventDefault(); const form=e.currentTarget; const button=document.getElementById('generate-button');
+  const message=document.getElementById('submit-message'); button.disabled=true; message.textContent='受け付けています…';
+  try{
+    const body=Object.fromEntries(new FormData(form));
+    const r=await fetch('/submit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const j=await r.json(); if(!r.ok)throw new Error(j.error||'生成を開始できませんでした');
+    message.textContent='#'+j.id+' をキューへ追加しました。完成すると下に表示されます。'; await tick();
+  }catch(error){message.textContent=error.message;}finally{button.disabled=false;}
+});
 async function tick(){
   try{
     const r=await fetch('/latest.json',{cache:'no-store'}); const j=await r.json();
