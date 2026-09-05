@@ -222,6 +222,7 @@ GALLERY_HTML = """<!doctype html>
 <div class="empty" id="empty">まだ誰も完成していない</div>
 <script>
 let lastLatest=null;
+function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 async function tick(){
   try{
     const r=await fetch('/latest.json',{cache:'no-store'}); const j=await r.json();
@@ -237,7 +238,7 @@ async function tick(){
     const g=document.getElementById('grid'); g.innerHTML='';
     for(const x of items){ const c=document.createElement('div'); c.className='card';
       const lab=x.status==='done'?'':(x.status==='error'?'失敗':'生成中…');
-      c.innerHTML=(x.image?`<img src="${x.image}" alt="">`:`<div class="ph">${lab||'画像なし'}</div>`)+`<p>#${x.id} ${x.device}<br>${x.sentence}</p>`;
+      c.innerHTML=(x.image?`<img src="${esc(x.image)}" alt="">`:`<div class="ph">${esc(lab||'画像なし')}</div>`)+`<p>#${x.id} ${esc(x.device)}<br>${esc(x.sentence)}</p>`;
       g.appendChild(c);}
   }catch(e){ document.getElementById('st').textContent='接続できない'; }
 }
