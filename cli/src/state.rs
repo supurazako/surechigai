@@ -206,6 +206,7 @@ impl State {
                 "gift is not requested by peer"
             );
         }
+        let was_complete = self.sentence.is_complete();
         if let Some(phrase) = received.gift.clone() {
             ensure!(
                 self.sentence.accept(peer.node, peer.name.clone(), phrase),
@@ -231,7 +232,7 @@ impl State {
             self.sentence.render(),
             self.sentence.missing_mask().count_ones()
         );
-        if self.sentence.is_complete() {
+        if !was_complete && self.sentence.is_complete() {
             let rendered = self.sentence.render();
             println!("文章完成 round={} 文={:?}", self.sentence.round, rendered);
             if let Some(url) = &self.post_url {
@@ -605,6 +606,11 @@ mod tests {
                 Phrase::new(slot, format!("filled-{}", slot.label())).unwrap(),
             ));
         }
+        completed.set_post_url(Some("http://127.0.0.1:9/submit".into()));
+        *completed.image_status.lock().unwrap() = Some(post::ImageStatus {
+            status: "done".into(),
+            image_url: Some("http://127.0.0.1:8000/image/1.jpg".into()),
+        });
         let mut collecting = State::new(
             Uuid::new_v4(),
             "collecting".into(),
@@ -639,6 +645,12 @@ mod tests {
             .unwrap();
 
         assert!(completed.sentence.is_complete());
+        let image_status = completed.image_status().unwrap();
+        assert_eq!(image_status.status, "done");
+        assert_eq!(
+            image_status.image_url.as_deref(),
+            Some("http://127.0.0.1:8000/image/1.jpg")
+        );
         assert_eq!(collecting.sentence.missing_mask().count_ones(), 5);
         assert_eq!(
             collecting.sentence.entry(distributed.slot).unwrap().source,
