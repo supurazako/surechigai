@@ -14,6 +14,9 @@ const completion = document.querySelector("#completion");
 const exchangeList = document.querySelector("#exchange-list");
 const emptyLog = document.querySelector("#empty-log");
 const deviceId = document.querySelector("#device-id");
+const imagePanel = document.querySelector("#image-panel");
+const imageStatusLabel = document.querySelector("#image-status-label");
+const imagePreview = document.querySelector("#image-preview");
 
 const sentenceOrder = ["when", "how", "who", "where", "why", "what"];
 let initialized = false;
@@ -95,6 +98,32 @@ function renderHistory(device) {
   );
 }
 
+const imageStatusText = {
+  送信中: "広場サーバへ送信中…",
+  queued: "画像生成の順番待ち…",
+  working: "画像を生成中…",
+  done: "画像ができました",
+  error: "画像生成に失敗しました",
+  timeout: "画像生成がタイムアウトしました",
+  送信失敗: "広場サーバへの送信に失敗しました",
+};
+
+function renderImage(device) {
+  if (!device.image_status) {
+    imagePanel.classList.add("is-hidden");
+    return;
+  }
+  imagePanel.classList.remove("is-hidden");
+  imageStatusLabel.textContent =
+    imageStatusText[device.image_status] || device.image_status;
+  if (device.image_url) {
+    imagePreview.src = device.image_url;
+    imagePreview.classList.remove("is-hidden");
+  } else {
+    imagePreview.classList.add("is-hidden");
+  }
+}
+
 function render(state) {
   setFormValues(state.setup);
   renderStatus(state);
@@ -105,6 +134,7 @@ function render(state) {
   if (running) {
     renderSentence(state.device);
     renderHistory(state.device);
+    renderImage(state.device);
   }
 }
 

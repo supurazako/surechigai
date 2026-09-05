@@ -50,6 +50,11 @@ pub struct Config {
     pub web: bool,
     #[arg(long, default_value_t = 8787, help = "Web UIの待受ポート")]
     pub web_port: u16,
+    #[arg(
+        long,
+        help = "文章完成時にPOSTする広場サーバのURL（例: http://127.0.0.1:8000/submit）。未指定なら送信しない"
+    )]
+    pub post_url: Option<String>,
 }
 
 impl Config {
@@ -85,6 +90,12 @@ impl Config {
             "再交換間隔は0〜86400秒にしてください"
         );
         ensure!(self.web_port > 0, "Web UIのポートは1〜65535にしてください");
+        if let Some(url) = &self.post_url {
+            ensure!(
+                url.starts_with("http://"),
+                "--post-url は http:// で始めてください（httpsは未対応）"
+            );
+        }
         Ok(())
     }
 

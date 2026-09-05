@@ -68,13 +68,15 @@ impl Radio {
             config.how,
             config.rssi_threshold
         );
-        let state = Arc::new(Mutex::new(State::new(
+        let mut initial_state = State::new(
             node,
             config.name.clone(),
             deck,
             Duration::from_secs(config.exchange_timeout_secs),
             Duration::from_secs(config.cooldown_secs),
-        )));
+        );
+        initial_state.set_post_url(config.post_url.clone());
+        let state = Arc::new(Mutex::new(initial_state));
         if let Some(viewer) = &viewer {
             viewer.attach_state(state.clone());
         }
