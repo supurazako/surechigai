@@ -2,6 +2,7 @@
 """広場サーバ: 完成した文章を受け取り、画像を生成して配る。
 
   python server.py                 # 本番（OpenAI を呼ぶ。OPENAI_API_KEY 必須）
+  python server.py --backend apple-silicon  # Apple Silicon上でローカル生成
   python server.py --dry           # API を呼ばない。動作確認用（Pillow があれば文字入りの代替画像を作る）
   python server.py --port 8000 --quality low
 
@@ -14,7 +15,7 @@ HTTP の口（これがデバイスとの接点）:
   GET  /  または /gallery  ブラウザ用の広場（3 秒ごとに自動更新）
   GET  /health            {"ok":true}
 
-依存: 標準ライブラリのみ（--dry の代替画像だけ Pillow があれば使う）。
+依存: 通常は標準ライブラリのみ。Apple Siliconローカル生成は追加依存あり。
 鍵は環境変数 OPENAI_API_KEY から読む。コードに書かない。
 """
 from __future__ import annotations
@@ -23,6 +24,7 @@ import argparse
 import base64
 import json
 import os
+import platform
 import queue
 import sys
 import threading
@@ -42,11 +44,19 @@ IMAGES = DATA / "images"
 JOBS_FILE = DATA / "jobs.jsonl"
 
 STYLE = "シンプルで明るいイラスト。1 枚絵。文字は入れない。"
+LOCAL_STYLE = "bright simple illustration, single scene, no text"
+LOCAL_MODEL = "stabilityai/sd-turbo"
 DEDUP_SECONDS = 60  # 同じデバイスから同じ文が短時間に来たら同じ id を返す（再送対策）
 
 
 def build_prompt(sentence: str) -> str:
     return f"次の文をそのまま絵にしてください。文: 「{sentence}」。{STYLE}"
+
+
+def build_local_prompt(sentence: str) -> str:
+    # CLIPは最大77トークンで、日本語は英語より細かく分割される。
+    # 長い日本語の指示を足さず、5W1H本文を先頭に置いて優先する。
+    return f"{sentence}. {LOCAL_STYLE}"
 
 
 # ---------------------------------------------------------------- 状態
@@ -168,10 +178,93 @@ def gen_dry(sentence: str) -> bytes | None:
     return buf.getvalue()
 
 
+class DryGenerator:
+    label = "DRY（APIを呼ばない）"
+
+    def generate(self, sentence: str) -> bytes | None:
+        return gen_dry(sentence)
+
+
+class OpenAIGenerator:
+    def __init__(self, quality: str, model: str) -> None:
+        self.quality = quality
+        self.model = model
+        self.label = f"OpenAI {model} quality={quality}"
+
+    def generate(self, sentence: str) -> bytes:
+        return gen_openai(build_prompt(sentence), self.quality, self.model)
+
+
+class AppleSiliconGenerator:
+    """SD-TurboをMPSで常駐実行する、低メモリMac向け生成器。"""
+
+    def __init__(self, model: str, steps: int) -> None:
+        if platform.system() != "Darwin" or platform.machine() not in ("arm64", "aarch64"):
+            raise RuntimeError("apple-silicon backendはApple Silicon搭載Mac専用です")
+        if not 1 <= steps <= 4:
+            raise RuntimeError("ローカル生成のstepsは1〜4にしてください")
+        try:
+            import torch
+            from diffusers import AutoPipelineForText2Image
+        except ImportError as error:
+            raise RuntimeError(
+                "ローカル生成の依存がありません。"
+                "pip install -r requirements-apple-silicon.txt を実行してください"
+            ) from error
+        if not torch.backends.mps.is_available():
+            raise RuntimeError("PyTorchからMPSを利用できません。arm64版PythonとmacOS 13以降を確認してください")
+
+        print(f"ローカル画像モデルを読み込んでいます: {model}")
+        self.torch = torch
+        self.steps = steps
+        try:
+            self.pipeline = AutoPipelineForText2Image.from_pretrained(
+                model,
+                dtype=torch.float16,
+                variant="fp16",
+                use_safetensors=True,
+            )
+            self.pipeline.enable_attention_slicing()
+            if hasattr(self.pipeline, "enable_vae_slicing"):
+                self.pipeline.enable_vae_slicing()
+            elif hasattr(self.pipeline, "vae") and hasattr(self.pipeline.vae, "enable_slicing"):
+                self.pipeline.vae.enable_slicing()
+            self.pipeline.to("mps")
+        except Exception as error:
+            raise RuntimeError(f"ローカル画像モデルの読み込みに失敗しました: {error}") from error
+        self.label = f"Local Apple Silicon {model} steps={steps} 512x512"
+
+    def generate(self, sentence: str) -> bytes:
+        import io
+
+        try:
+            with self.torch.inference_mode():
+                image = self.pipeline(
+                    prompt=build_local_prompt(sentence),
+                    num_inference_steps=self.steps,
+                    guidance_scale=0.0,
+                    width=512,
+                    height=512,
+                ).images[0]
+            buf = io.BytesIO()
+            image.convert("RGB").save(buf, "JPEG", quality=75, optimize=True)
+            return buf.getvalue()
+        finally:
+            self.torch.mps.empty_cache()
+
+
+def make_generator(backend: str, quality: str, model: str | None, steps: int):
+    if backend == "dry":
+        return DryGenerator()
+    if backend == "apple-silicon":
+        return AppleSiliconGenerator(model or LOCAL_MODEL, steps)
+    return OpenAIGenerator(quality, model or "gpt-image-1")
+
+
 class Worker(threading.Thread):
-    def __init__(self, store: Store, q: "queue.Queue[int]", dry: bool, quality: str, model: str):
+    def __init__(self, store: Store, q: "queue.Queue[int]", generator):
         super().__init__(daemon=True)
-        self.store, self.q, self.dry, self.quality, self.model = store, q, dry, quality, model
+        self.store, self.q, self.generator = store, q, generator
 
     def run(self) -> None:
         while True:
@@ -182,10 +275,7 @@ class Worker(threading.Thread):
             self.store.update(job_id, status="working")
             t0 = time.time()
             try:
-                if self.dry:
-                    data = gen_dry(job["sentence"])
-                else:
-                    data = gen_openai(build_prompt(job["sentence"]), self.quality, self.model)
+                data = self.generator.generate(job["sentence"])
                 image = None
                 if data:
                     (IMAGES / f"{job_id}.jpg").write_bytes(data)
@@ -319,20 +409,33 @@ def make_handler(store: Store, q: "queue.Queue[int]"):
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", type=int, default=8000)
-    ap.add_argument("--dry", action="store_true", help="OpenAI を呼ばない")
+    ap.add_argument(
+        "--backend",
+        default="openai",
+        choices=["openai", "apple-silicon", "dry"],
+        help="画像生成バックエンド（既定: openai）",
+    )
+    ap.add_argument("--dry", action="store_true", help="--backend dry の互換ショートカット")
     ap.add_argument("--quality", default="low", choices=["low", "medium", "high"], help="OpenAI の画質（既定 low = 速い・安い）")
-    ap.add_argument("--model", default="gpt-image-1")
+    ap.add_argument("--model", default=None, help="モデル名（バックエンドごとの既定値を上書き）")
+    ap.add_argument("--steps", type=int, default=1, help="Apple Siliconローカル生成のステップ数（1〜4、既定1）")
     args = ap.parse_args()
 
-    if not args.dry and not os.environ.get("OPENAI_API_KEY"):
+    if args.dry and args.backend != "openai":
+        ap.error("--dry と --backend は同時に指定できません")
+    backend = "dry" if args.dry else args.backend
+    if backend == "openai" and not os.environ.get("OPENAI_API_KEY"):
         sys.exit("OPENAI_API_KEY が無い。--dry で動かすか鍵を環境変数に入れる")
 
+    try:
+        generator = make_generator(backend, args.quality, args.model, args.steps)
+    except RuntimeError as error:
+        sys.exit(str(error))
     store = Store()
     q: "queue.Queue[int]" = queue.Queue()
-    Worker(store, q, args.dry, args.quality, args.model).start()
+    Worker(store, q, generator).start()
     srv = ThreadingHTTPServer(("0.0.0.0", args.port), make_handler(store, q))
-    mode = "DRY（API を呼ばない）" if args.dry else f"OpenAI {args.model} quality={args.quality}"
-    print(f"広場サーバ http://0.0.0.0:{args.port}/  {mode}  既存ジョブ {len(store.jobs)} 件")
+    print(f"広場サーバ http://0.0.0.0:{args.port}/  {generator.label}  既存ジョブ {len(store.jobs)} 件")
     print("デバイスからは PC の LAN IP で。ipconfig の IPv4 アドレスを確認。Ctrl+C で終了")
     try:
         srv.serve_forever()
