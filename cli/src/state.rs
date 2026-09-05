@@ -47,6 +47,7 @@ pub struct State {
     cooldown: Duration,
     post_url: Option<String>,
     image_status: post::ImageStatusHandle,
+    posted_round: Option<Uuid>,
 }
 
 impl State {
@@ -71,6 +72,7 @@ impl State {
             cooldown,
             post_url: None,
             image_status: post::new_image_status_handle(),
+            posted_round: None,
         }
     }
 
@@ -82,7 +84,10 @@ impl State {
 
     /// 直近に完成した文章の画像生成状況（Web Viewer表示用）。
     pub fn image_status(&self) -> Option<post::ImageStatus> {
-        self.image_status.lock().ok().and_then(|guard| guard.clone())
+        self.image_status
+            .lock()
+            .ok()
+            .and_then(|guard| guard.as_ref().and_then(|tracked| tracked.status.clone()))
     }
 
     pub fn node(&self) -> Uuid {
@@ -197,13 +202,18 @@ impl State {
         if self.sentence.is_complete() {
             let rendered = self.sentence.render();
             println!("文章完成 round={} 文={:?}", self.sentence.round, rendered);
-            if let Some(url) = &self.post_url {
-                post::spawn_post(
-                    url.clone(),
-                    self.name.clone(),
-                    rendered,
-                    self.image_status.clone(),
-                );
+            // 完成後も交換自体は継続するため、同じroundでの二重送信（＝二重課金）を防ぐ。
+            if self.posted_round != Some(self.sentence.round) {
+                self.posted_round = Some(self.sentence.round);
+                if let Some(url) = &self.post_url {
+                    post::spawn_post(
+                        url.clone(),
+                        self.name.clone(),
+                        rendered,
+                        self.sentence.round,
+                        self.image_status.clone(),
+                    );
+                }
             }
         }
         Ok(())
