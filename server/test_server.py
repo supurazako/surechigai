@@ -9,13 +9,85 @@ import json
 import subprocess
 import sys
 import time
+import types
 import urllib.error
 import urllib.request
+from contextlib import nullcontext
 from pathlib import Path
+from unittest import mock
+
+import server as app
 
 HERE = Path(__file__).resolve().parent
 PORT = 8765
 BASE = f"http://127.0.0.1:{PORT}"
+
+
+def test_generators() -> None:
+    assert isinstance(app.make_generator("dry", "low", None, 1), app.DryGenerator)
+    remote = app.make_generator("openai", "medium", None, 1)
+    assert remote.label == "OpenAI gpt-image-1 quality=medium"
+
+    with mock.patch.object(app.platform, "system", return_value="Linux"):
+        try:
+            app.AppleSiliconGenerator(app.LOCAL_MODEL, 1)
+        except RuntimeError as error:
+            assert "Apple Silicon搭載Mac専用" in str(error)
+        else:
+            raise AssertionError("LinuxでApple Silicon backendを受け入れた")
+
+    class FakeImage:
+        def convert(self, mode: str):
+            assert mode == "RGB"
+            return self
+
+        def save(self, output, image_format: str, **_kwargs) -> None:
+            assert image_format == "JPEG"
+            output.write(b"\xff\xd8fake-jpeg")
+
+    class FakePipeline:
+        loaded = None
+
+        @classmethod
+        def from_pretrained(cls, model: str, **options):
+            cls.loaded = (model, options)
+            return cls()
+
+        def enable_attention_slicing(self) -> None:
+            pass
+
+        def enable_vae_slicing(self) -> None:
+            pass
+
+        def to(self, device: str) -> None:
+            assert device == "mps"
+
+        def __call__(self, **options):
+            assert options["prompt"].startswith("犬がパリへ行く")
+            assert "no text" in options["prompt"]
+            assert options["width"] == options["height"] == 512
+            assert options["num_inference_steps"] == 1
+            assert options["guidance_scale"] == 0.0
+            return types.SimpleNamespace(images=[FakeImage()])
+
+    fake_mps = types.SimpleNamespace(is_available=lambda: True, empty_cache=lambda: None)
+    fake_torch = types.SimpleNamespace(
+        backends=types.SimpleNamespace(mps=fake_mps),
+        mps=fake_mps,
+        float16="float16",
+        inference_mode=nullcontext,
+    )
+    fake_diffusers = types.SimpleNamespace(AutoPipelineForText2Image=FakePipeline)
+    modules = {"torch": fake_torch, "diffusers": fake_diffusers}
+    with (
+        mock.patch.object(app.platform, "system", return_value="Darwin"),
+        mock.patch.object(app.platform, "machine", return_value="arm64"),
+        mock.patch.dict(sys.modules, modules),
+    ):
+        local = app.AppleSiliconGenerator(app.LOCAL_MODEL, 1)
+        assert local.generate("犬がパリへ行く").startswith(b"\xff\xd8")
+        assert FakePipeline.loaded[0] == app.LOCAL_MODEL
+        assert FakePipeline.loaded[1]["dtype"] == "float16"
 
 
 def req(method: str, path: str, body: dict | None = None):
@@ -44,6 +116,7 @@ def main() -> None:
     for _s in (sys.stdout, sys.stderr):
         if hasattr(_s, "reconfigure"):
             _s.reconfigure(encoding="utf-8", errors="replace")
+    test_generators()
     proc = subprocess.Popen([sys.executable, "-u", str(HERE / "server.py"), "--dry", "--port", str(PORT)],
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8")
     try:
