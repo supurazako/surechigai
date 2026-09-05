@@ -1,6 +1,6 @@
 # surechigai
 
-BLEを使って近くの端末とメッセージを交換するアプリです。実行環境ごとにディレクトリを分けています。
+BLEを使って近くの端末と5W1Hの文節を交換し、文章を組み立てるアプリです。実行環境ごとにディレクトリを分けています。
 
 ```text
 cli/       macOS・Linux向けRust CLI
@@ -12,7 +12,7 @@ m5stack/   M5Stack向けファームウェア（実装予定）
 ```sh
 cd cli
 cargo build --locked
-./target/debug/surechigai --message "こんにちは" --rssi-threshold=-65
+./target/debug/surechigai --name "alice" --who "犬が" --where "パリに" --what "行く" --rssi-threshold=-65
 ```
 
 ビルド成果物は `cli/target/debug/surechigai`、`--release` でビルドした場合は `cli/target/release/surechigai` です。

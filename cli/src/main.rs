@@ -8,7 +8,7 @@ use surechigai::config::Config;
 async fn main() -> Result<()> {
     let config = Config::parse();
     config.validate()?;
-    let mut radio = ble::Radio::new(config);
+    let mut radio = ble::Radio::new(config)?;
     let result = tokio::select! {
         result = radio.run() => result,
         signal = shutdown_signal() => {
