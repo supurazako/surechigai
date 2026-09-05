@@ -1,3 +1,10 @@
 /target/
 /cli/target/
 .DS_Store
+
+# server/ (画像生成サーバ)
+server/out/
+server/data/
+server/__pycache__/
+server/*.pyc
+server/.env
