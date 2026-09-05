@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>変な文章生成マシーン — 元ネタの系譜</title>
+<style>
+  :root { --ink:#1b1b1f; --sub:#5b5b66; --line:#d9d9e0; --bg:#fbfbfd; --acc:#2f5bea; --card:#fff; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font-family:"Hiragino Sans","Yu Gothic UI","Noto Sans JP",system-ui,sans-serif; line-height:1.7; }
+  main { max-width:920px; margin:0 auto; padding:48px 24px 72px; }
+  h1 { font-size:28px; margin:0 0 6px; letter-spacing:.02em; }
+  .lead { color:var(--sub); margin:0 0 36px; }
+  .timeline { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin:0 0 36px; }
+  .step { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px 16px 14px; position:relative; }
+  .step .when { font-size:12px; color:var(--acc); font-weight:700; letter-spacing:.08em; }
+  .step h2 { font-size:17px; margin:4px 0 6px; }
+  .step p { margin:0; font-size:13.5px; color:var(--sub); }
+  .step:not(:last-child)::after { content:"→"; position:absolute; right:-14px; top:50%; transform:translateY(-50%); color:var(--line); font-size:20px; }
+  .map { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:20px 22px; margin-bottom:28px; }
+  .map h3 { margin:0 0 10px; font-size:15px; }
+  table { border-collapse:collapse; width:100%; font-size:14px; }
+  th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--sub); font-weight:600; width:32%; }
+  .ex { font-size:20px; text-align:center; padding:22px; background:#eef2ff; border-radius:10px; margin-bottom:28px; letter-spacing:.04em; }
+  .ex small { display:block; font-size:12px; color:var(--sub); margin-top:6px; letter-spacing:0; }
+  .src { font-size:12.5px; color:var(--sub); }
+  .src a { color:var(--acc); text-decoration:none; }
+  @media (max-width:720px) { .timeline { grid-template-columns:1fr; } .step:not(:last-child)::after { content:"↓"; right:auto; left:50%; top:auto; bottom:-18px; transform:translateX(-50%); } }
+</style>
+</head>
+<body>
+<main>
+  <h1>変な文章生成マシーン</h1>
+  <p class="lead">紙を折って隣に回す遊びを、すれ違って断片を受け取る遊びに置き換えた。</p>
+
+  <div class="timeline">
+    <div class="step">
+      <div class="when">1800 年代・英国</div>
+      <h2>Consequences</h2>
+      <p>ヴィクトリア朝の紙ペン遊び。「男の名 / 女の名 / どこで会った / 彼は言った / 彼女は言った / その結果」を順に書き、折って隣へ回す。</p>
+    </div>
+    <div class="step">
+      <div class="when">1925 年・パリ</div>
+      <h2>Exquisite Corpse</h2>
+      <p>ブルトン、デュシャンらシュルレアリストが Consequences を元に。名前は最初の一文「優美な屍骸は新しい酒を飲むだろう」から。</p>
+    </div>
+    <div class="step">
+      <div class="when">日本・定番</div>
+      <h2>いつどこでだれがなにをしたゲーム</h2>
+      <p>4 人以上で「いつ / どこで / だれが / なにをした」を書いてシャッフル。児童館や国語教材にもなっている。</p>
+    </div>
+    <div class="step">
+      <div class="when">2026・本作</div>
+      <h2>すれ違い通信版</h2>
+      <p>M5Stack の BLE で断片を持ち歩く。すれ違うたびに足りない部分を 1 つ受け取り、5W1H が揃うと文章が完成。</p>
+    </div>
+  </div>
+
+  <div class="ex">
+    暇だったので　真夜中に　パリで　従順な犬が　全力で　ラーメンを食べた
+    <small>なぜ / いつ / どこで / 誰が / どうやって / 何をした</small>
+  </div>
+
+  <div class="map">
+    <h3>動作の対応</h3>
+    <table>
+      <tr><th>紙を折って隣に回す</th><td>すれ違って相手の名札（BLE advertise）を読む</td></tr>
+      <tr><th>自分の担当欄を書く</th><td>各デバイスが起動時にランダムで一式を持つ</td></tr>
+      <tr><th>全部の欄が埋まる</th><td>足りないスロットを 1 つずつ受け取り、揃ったら完成</td></tr>
+      <tr><th>開いて読み上げる</th><td>Tab5 の広場に表示（発展: 文章から画像生成）</td></tr>
+    </table>
+  </div>
+
+  <p class="src">
+    出典:
+    <a href="https://en.wikipedia.org/wiki/Consequences_(game)">Consequences (Wikipedia)</a> ·
+    <a href="https://en.wikipedia.org/wiki/Exquisite_corpse">Exquisite corpse (Wikipedia)</a> ·
+    <a href="https://dic.pixiv.net/a/%E3%81%84%E3%81%A4%E3%81%A9%E3%81%93%E3%81%A7%E8%AA%B0%E3%81%8C%E4%BD%95%E3%82%92%E3%81%97%E3%81%9F%E3%82%B2%E3%83%BC%E3%83%A0">いつどこで誰が何をしたゲーム (ピクシブ百科事典)</a>
+  </p>
+</main>
+</body>
+</html>
