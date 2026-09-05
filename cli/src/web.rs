@@ -190,6 +190,7 @@ fn router(viewer: ViewerHandle) -> Router {
         .route("/style.css", get(stylesheet))
         .route("/api/state", get(api_state))
         .route("/api/start", post(api_start))
+        .route("/api/generate", post(api_generate))
         .with_state(viewer)
 }
 
@@ -263,6 +264,41 @@ struct SetupAccepted {
     accepted: bool,
 }
 
+#[derive(Deserialize)]
+struct GenerateRequest {
+    sentence: String,
+}
+
+async fn api_generate(
+    AxumState(viewer): AxumState<ViewerHandle>,
+    Json(request): Json<GenerateRequest>,
+) -> Result<Json<SetupAccepted>, (StatusCode, Json<ApiError>)> {
+    let state = {
+        let inner = viewer.inner.lock().unwrap();
+        inner.state.clone().ok_or_else(|| {
+            (
+                StatusCode::CONFLICT,
+                Json(ApiError {
+                    error: "交換を開始してから画像を生成してください".into(),
+                }),
+            )
+        })?
+    };
+    state
+        .lock()
+        .unwrap()
+        .request_image(&request.sentence)
+        .map_err(|error| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ApiError {
+                    error: error.to_string(),
+                }),
+            )
+        })?;
+    Ok(Json(SetupAccepted { accepted: true }))
+}
+
 async fn api_state(AxumState(viewer): AxumState<ViewerHandle>) -> Json<ViewerResponse> {
     Json(snapshot(&viewer))
 }
@@ -286,6 +322,8 @@ struct DeviceView {
     missing_count: u32,
     slots: Vec<SlotView>,
     exchanges: Vec<ExchangeView>,
+    image_generation_enabled: bool,
+    image_generation_busy: bool,
     image_status: Option<String>,
     image_url: Option<String>,
 }
@@ -355,6 +393,8 @@ fn snapshot(viewer: &ViewerHandle) -> ViewerResponse {
                     received: phrase_label(exchange.received.as_ref()),
                 })
                 .collect(),
+            image_generation_enabled: state.image_generation_enabled(),
+            image_generation_busy: state.image_generation_busy(),
             image_status: image_status.as_ref().map(|s| s.status.clone()),
             image_url: image_status.and_then(|s| s.image_url),
         }
@@ -461,6 +501,7 @@ mod tests {
         let mut valid = SetupRequest::from_config(&config);
         valid.name = "alice".into();
         let response = app
+            .clone()
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -473,6 +514,80 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(setup_receiver.await.unwrap().name, "alice");
+    }
+
+    #[tokio::test]
+    async fn api_generate_requires_running_state_and_post_url() {
+        let config = Config::try_parse_from(["test", "--web"]).unwrap();
+        let (viewer, _setup_receiver) = viewer(&config);
+        let app = router(viewer.clone());
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/generate")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"sentence":"ある日、犬が歩いた"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+
+        let state = State::new(
+            Uuid::new_v4(),
+            "alice".into(),
+            config.deck().unwrap(),
+            Duration::from_secs(5),
+            Duration::from_secs(30),
+        );
+        let state = Arc::new(Mutex::new(state));
+        viewer.attach_state(state.clone());
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/generate")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"sentence":"ある日、犬が歩いた"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        state
+            .lock()
+            .unwrap()
+            .set_post_url(Some("http://127.0.0.1:9/submit".into()));
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/generate")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"sentence":"ある日、犬が歩いた"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/generate")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"sentence":"続けて生成"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[test]

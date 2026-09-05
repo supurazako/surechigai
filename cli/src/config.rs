@@ -52,7 +52,7 @@ pub struct Config {
     pub web_port: u16,
     #[arg(
         long,
-        help = "文章完成時にPOSTする広場サーバのURL（例: http://127.0.0.1:8000/submit）。未指定なら送信しない"
+        help = "Web Viewerから画像生成を手動実行する広場サーバのURL（例: http://127.0.0.1:8000/submit）"
     )]
     pub post_url: Option<String>,
 }

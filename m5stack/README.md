@@ -139,7 +139,7 @@ Service UUID、Characteristic UUID、フレーム形式は[CLIの通信仕様](.
 
 ## 広場サーバ（画像生成）との連携
 
-Tab5・CLIともに、完成した文章から画像を生成する[../server/](../server/)へは接続していません。
-完成した文章をサーバーへ送るのはCLI側の役目です（`--post-url`。[cli/README.md](../cli/README.md#広場サーバ連携)を参照）。
+Tab5自身は、完成した文章から画像を生成する[../server/](../server/)へ接続していません。
+完成した文章はCLI Web Viewerから手動でサーバーへ送れます（`--post-url`。[cli/README.md](../cli/README.md#広場サーバ連携)を参照）。
 Tab5同士だけで交換が完結した場合は、そのままではサーバーに届きません。CLIを介して交換するか、
 `tab5_hiroba.ino`（予備のTab5・ブラウザを公開表示用の"広場"画面として使う。Wi-Fi経由で[../server/](../server/)から取得表示するだけで、5W1H交換には関与しない）を別端末で動かして観客向けに表示してください。

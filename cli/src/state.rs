@@ -47,7 +47,6 @@ pub struct State {
     cooldown: Duration,
     post_url: Option<String>,
     image_status: post::ImageStatusHandle,
-    posted_round: Option<Uuid>,
 }
 
 impl State {
@@ -72,12 +71,10 @@ impl State {
             cooldown,
             post_url: None,
             image_status: post::new_image_status_handle(),
-            posted_round: None,
         }
     }
 
-    /// 文章完成時にPOSTする広場サーバのURL（`server/`の`POST /submit`）を設定する。
-    /// 未設定なら送信しない。
+    /// Web Viewerから手動送信するときに使う広場サーバのURLを設定する。
     pub fn set_post_url(&mut self, post_url: Option<String>) {
         self.post_url = post_url;
     }
@@ -88,6 +85,41 @@ impl State {
             .lock()
             .ok()
             .and_then(|guard| guard.as_ref().and_then(|tracked| tracked.status.clone()))
+    }
+
+    /// Web Viewerから入力された文章の画像生成を開始する。
+    pub fn request_image(&self, sentence: &str) -> Result<()> {
+        let sentence = sentence.trim();
+        ensure!(!sentence.is_empty(), "文章を入力してください");
+        ensure!(
+            sentence.chars().count() <= 200,
+            "文章は200文字以内にしてください"
+        );
+        ensure!(
+            !self.image_generation_busy(),
+            "画像を生成中です。完了してから再度お試しください"
+        );
+        let post_url = self
+            .post_url
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("画像生成には --post-url の指定が必要です"))?;
+        post::spawn_post(
+            post_url.clone(),
+            self.name.clone(),
+            sentence.to_string(),
+            Uuid::new_v4(),
+            self.image_status.clone(),
+        );
+        Ok(())
+    }
+
+    pub fn image_generation_enabled(&self) -> bool {
+        self.post_url.is_some()
+    }
+
+    pub fn image_generation_busy(&self) -> bool {
+        self.image_status()
+            .is_some_and(|status| matches!(status.status.as_str(), "送信中" | "queued" | "working"))
     }
 
     pub fn node(&self) -> Uuid {
@@ -174,6 +206,7 @@ impl State {
                 "gift is not requested by peer"
             );
         }
+        let was_complete = self.sentence.is_complete();
         if let Some(phrase) = received.gift.clone() {
             ensure!(
                 self.sentence.accept(peer.node, peer.name.clone(), phrase),
@@ -199,22 +232,12 @@ impl State {
             self.sentence.render(),
             self.sentence.missing_mask().count_ones()
         );
-        if self.sentence.is_complete() {
-            let rendered = self.sentence.render();
-            println!("文章完成 round={} 文={:?}", self.sentence.round, rendered);
-            // 完成後も交換自体は継続するため、同じroundでの二重送信（＝二重課金）を防ぐ。
-            if self.posted_round != Some(self.sentence.round) {
-                self.posted_round = Some(self.sentence.round);
-                if let Some(url) = &self.post_url {
-                    post::spawn_post(
-                        url.clone(),
-                        self.name.clone(),
-                        rendered,
-                        self.sentence.round,
-                        self.image_status.clone(),
-                    );
-                }
-            }
+        if !was_complete && self.sentence.is_complete() {
+            println!(
+                "文章完成 round={} 文={:?}",
+                self.sentence.round,
+                self.sentence.render()
+            );
         }
         Ok(())
     }
@@ -620,6 +643,42 @@ mod tests {
     }
 
     #[test]
+    fn completing_sentence_does_not_generate_image_automatically() {
+        let now = Instant::now();
+        let mut state = State::new(
+            Uuid::new_v4(),
+            "local-user".into(),
+            deck("local"),
+            Duration::from_secs(10),
+            Duration::from_secs(30),
+        );
+        state.set_post_url(Some("http://127.0.0.1:9/submit".into()));
+        for slot in Slot::ALL.into_iter().filter(|slot| *slot != Slot::What) {
+            assert!(state.sentence.accept(
+                Uuid::new_v4(),
+                "source".into(),
+                Phrase::new(slot, format!("filled-{}", slot.label())).unwrap(),
+            ));
+        }
+        let peer = Profile {
+            node: Uuid::new_v4(),
+            name: "peer-user".into(),
+            round: Uuid::new_v4(),
+            missing: ALL_MISSING,
+        };
+        let sent = state.choose_gift(&peer);
+        let received = GiftPacket {
+            receiver_round: state.sentence.round,
+            gift: Some(Phrase::new(Slot::What, "歩いた".into()).unwrap()),
+        };
+
+        state.record_exchange(&peer, &sent, &received, now).unwrap();
+
+        assert!(state.sentence.is_complete());
+        assert!(state.image_status().is_none());
+    }
+
+    #[test]
     fn lease_blocks_role_change_and_other_clients_until_timeout() {
         let (mut state, peer, now) = fixture();
         let frames = Packet::Profile(peer).frames(9).unwrap();
@@ -689,76 +748,5 @@ mod tests {
                 .write("a", RX, &Packet::Profile(peer).frames(9).unwrap()[0], now)
                 .is_err()
         );
-    }
-
-    #[tokio::test]
-    async fn completed_round_posts_once_even_when_exchanges_continue() {
-        use std::{
-            io::{Read, Write},
-            net::TcpListener,
-            sync::{
-                Arc,
-                atomic::{AtomicUsize, Ordering},
-            },
-        };
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.set_nonblocking(true).unwrap();
-        let url = format!("http://{}/submit", listener.local_addr().unwrap());
-        let posts = Arc::new(AtomicUsize::new(0));
-        let counted = posts.clone();
-        let server = std::thread::spawn(move || {
-            let deadline = Instant::now() + Duration::from_secs(4);
-            while Instant::now() < deadline {
-                match listener.accept() {
-                    Ok((mut stream, _)) => {
-                        stream
-                            .set_read_timeout(Some(Duration::from_secs(1)))
-                            .unwrap();
-                        let mut buf = [0; 4096];
-                        let n = stream.read(&mut buf).unwrap();
-                        let body = if String::from_utf8_lossy(&buf[..n]).starts_with("POST") {
-                            counted.fetch_add(1, Ordering::SeqCst);
-                            r#"{"id":1,"status":"queued"}"#
-                        } else {
-                            r#"{"id":1,"status":"done","image":"/image/1.jpg"}"#
-                        };
-                        write!(
-                            stream,
-                            "HTTP/1.0 200 OK\r\nContent-Length: {}\r\n\r\n{}",
-                            body.len(),
-                            body
-                        )
-                        .unwrap();
-                    }
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        std::thread::sleep(Duration::from_millis(10))
-                    }
-                    Err(error) => panic!("{error}"),
-                }
-            }
-        });
-        let (mut state, peer, now) = fixture();
-        state.set_post_url(Some(url));
-        for slot in Slot::ALL {
-            let sent = state.choose_gift(&peer);
-            let received = GiftPacket {
-                receiver_round: state.sentence.round,
-                gift: Some(Phrase::new(slot, "word".into()).unwrap()),
-            };
-            state.record_exchange(&peer, &sent, &received, now).unwrap();
-        }
-        for _ in 0..3 {
-            let sent = state.choose_gift(&peer);
-            let received = GiftPacket {
-                receiver_round: state.sentence.round,
-                gift: None,
-            };
-            state
-                .record_exchange(&peer, &sent, &received, now + Duration::from_secs(61))
-                .unwrap();
-        }
-        server.join().unwrap();
-        assert_eq!(posts.load(Ordering::SeqCst), 1);
-        assert_eq!(state.image_status().unwrap().status, "done");
     }
 }

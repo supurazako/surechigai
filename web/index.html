@@ -80,6 +80,23 @@
         <ol class="sentence-grid" id="sentence-grid"></ol>
         <blockquote id="rendered-sentence">まだ文節がありません</blockquote>
         <p class="completion is-hidden" id="completion">文章が完成しました。配布はこのまま続きます。</p>
+        <div class="generation-panel">
+          <div>
+            <p class="section-label">IMAGE GENERATION</p>
+            <h3>文章から画像をつくる</h3>
+            <p>完成文が自動入力されます。Macの画像生成サーバを起動してから実行してください。</p>
+          </div>
+          <form id="generation-form">
+            <label class="outlined-field generation-field">
+              <span>画像にしたい文章</span>
+              <textarea name="sentence" rows="3" maxlength="200" placeholder="ある日、従順な犬がパリへ行った" required></textarea>
+            </label>
+            <div class="generation-actions">
+              <p id="generation-message" role="status" aria-live="polite"></p>
+              <button class="filled-button" type="submit" id="generate-button">画像を生成（Macのみ）</button>
+            </div>
+          </form>
+        </div>
         <div class="image-panel is-hidden" id="image-panel">
           <p id="image-status-label">広場サーバへ送信していません</p>
           <img id="image-preview" class="is-hidden" alt="生成された画像" />

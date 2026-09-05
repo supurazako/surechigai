@@ -38,5 +38,5 @@ Tab5自身のタッチUIに作成中の文章を表示します。詳細は [m5s
 
 完成した文章を受け取り、OpenAIまたはApple Silicon上のローカルモデルで画像を生成して広場ページに表示するPythonサーバです。
 CLI・Tab5ファームウェアの本体ロジックとは独立して動作し、`POST /submit` でのみ繋がります。
-文章完成時にCLIから自動でPOSTする機能は `cli/README.md` の「広場サーバ連携」を参照してください。
+CLI Web Viewerから手動でPOSTする機能は `cli/README.md` の「広場サーバ連携」を参照してください。
 詳細は [server/README.md](server/README.md) を参照してください。
