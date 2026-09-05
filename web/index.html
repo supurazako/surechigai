@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>すれ違い文庫</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="masthead">
+        <div>
+          <p class="eyebrow">SURECHIGAI 5W1H</p>
+          <h1>すれ違い文庫</h1>
+          <p class="lead">近くの誰かから、物語のかけらが届きます。</p>
+        </div>
+        <div class="status-pill" id="status-pill" aria-live="polite">
+          <span class="status-dot"></span>
+          <span id="status-label">準備中</span>
+        </div>
+      </header>
+
+      <section class="panel setup-panel" id="setup-panel">
+        <div class="section-heading">
+          <div>
+            <p class="step">01 / SETUP</p>
+            <h2>あなたの配布カード</h2>
+          </div>
+          <p>入力した6つの文節から、相手が持っていない種類をランダムに渡します。</p>
+        </div>
+        <form id="setup-form">
+          <label class="name-field">
+            <span>ユーザー名</span>
+            <input name="name" maxlength="32" autocomplete="nickname" required />
+          </label>
+          <div class="phrase-grid">
+            <label><span>いつ</span><input name="when" maxlength="64" required /></label>
+            <label><span>どのように</span><input name="how" maxlength="64" required /></label>
+            <label><span>だれが</span><input name="who" maxlength="64" required /></label>
+            <label><span>どこで</span><input name="where" maxlength="64" required /></label>
+            <label><span>なぜ</span><input name="why" maxlength="64" required /></label>
+            <label><span>なにをする</span><input name="what" maxlength="64" required /></label>
+          </div>
+          <div class="form-footer">
+            <p class="form-error" id="form-error" role="alert"></p>
+            <button type="submit" id="start-button">交換を開始</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel story-panel is-hidden" id="story-panel">
+        <div class="section-heading">
+          <div>
+            <p class="step">02 / STORY</p>
+            <h2>作成中の文章</h2>
+          </div>
+          <div class="progress-copy"><strong id="received-count">0</strong><span> / 6 fragments</span></div>
+        </div>
+        <div class="progress-track" aria-hidden="true"><div id="progress-bar"></div></div>
+        <ol class="sentence-grid" id="sentence-grid"></ol>
+        <blockquote id="rendered-sentence">まだ文節がありません</blockquote>
+        <p class="completion is-hidden" id="completion">文章が完成しました。配布はこのまま続きます。</p>
+      </section>
+
+      <section class="panel history-panel is-hidden" id="history-panel">
+        <div class="section-heading">
+          <div>
+            <p class="step">03 / LOG</p>
+            <h2>交換履歴</h2>
+          </div>
+          <p id="device-id"></p>
+        </div>
+        <div class="empty-log" id="empty-log">最初のすれ違いを待っています。</div>
+        <ul class="exchange-list" id="exchange-list"></ul>
+      </section>
+    </main>
+  </body>
+</html>

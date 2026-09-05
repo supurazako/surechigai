@@ -5,6 +5,7 @@ BLEを使って近くの端末と5W1Hの文節を交換し、文章を組み立�
 ```text
 cli/       macOS・Linux向けRust CLI
 m5stack/   M5Stack向けファームウェア（実装予定）
+web/       CLIに組み込む端末別Web Viewer
 ```
 
 ## CLI
@@ -17,6 +18,14 @@ cargo build --locked
 
 ビルド成果物は `cli/target/debug/surechigai`、`--release` でビルドした場合は `cli/target/release/surechigai` です。
 セットアップ、実機確認、テスト、通信仕様は [cli/README.md](cli/README.md) を参照してください。
+
+ブラウザから配布文節を設定し、作成中文章を見る場合は次のように起動します。
+
+```sh
+./target/debug/surechigai --web
+```
+
+表示されたURL（既定では `http://127.0.0.1:8787`）を同じ端末のブラウザで開いてください。
 
 ## M5Stack
 
