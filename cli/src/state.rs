@@ -690,4 +690,75 @@ mod tests {
                 .is_err()
         );
     }
+
+    #[tokio::test]
+    async fn completed_round_posts_once_even_when_exchanges_continue() {
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+            sync::{
+                Arc,
+                atomic::{AtomicUsize, Ordering},
+            },
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let url = format!("http://{}/submit", listener.local_addr().unwrap());
+        let posts = Arc::new(AtomicUsize::new(0));
+        let counted = posts.clone();
+        let server = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(4);
+            while Instant::now() < deadline {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        stream
+                            .set_read_timeout(Some(Duration::from_secs(1)))
+                            .unwrap();
+                        let mut buf = [0; 4096];
+                        let n = stream.read(&mut buf).unwrap();
+                        let body = if String::from_utf8_lossy(&buf[..n]).starts_with("POST") {
+                            counted.fetch_add(1, Ordering::SeqCst);
+                            r#"{"id":1,"status":"queued"}"#
+                        } else {
+                            r#"{"id":1,"status":"done","image":"/image/1.jpg"}"#
+                        };
+                        write!(
+                            stream,
+                            "HTTP/1.0 200 OK\r\nContent-Length: {}\r\n\r\n{}",
+                            body.len(),
+                            body
+                        )
+                        .unwrap();
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(10))
+                    }
+                    Err(error) => panic!("{error}"),
+                }
+            }
+        });
+        let (mut state, peer, now) = fixture();
+        state.set_post_url(Some(url));
+        for slot in Slot::ALL {
+            let sent = state.choose_gift(&peer);
+            let received = GiftPacket {
+                receiver_round: state.sentence.round,
+                gift: Some(Phrase::new(slot, "word".into()).unwrap()),
+            };
+            state.record_exchange(&peer, &sent, &received, now).unwrap();
+        }
+        for _ in 0..3 {
+            let sent = state.choose_gift(&peer);
+            let received = GiftPacket {
+                receiver_round: state.sentence.round,
+                gift: None,
+            };
+            state
+                .record_exchange(&peer, &sent, &received, now + Duration::from_secs(61))
+                .unwrap();
+        }
+        server.join().unwrap();
+        assert_eq!(posts.load(Ordering::SeqCst), 1);
+        assert_eq!(state.image_status().unwrap().status, "done");
+    }
 }

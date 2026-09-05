@@ -193,13 +193,18 @@ fn submit_with_retry(submit_url: &ParsedUrl, body: &str) -> std::io::Result<Stri
     Err(last_err.unwrap())
 }
 
-fn track_blocking(post_url: &str, device: &str, sentence: &str, round: Uuid, handle: &ImageStatusHandle) {
+fn track_blocking(
+    post_url: &str,
+    device: &str,
+    sentence: &str,
+    round: Uuid,
+    handle: &ImageStatusHandle,
+) {
     let Some(submit_url) = parse_http_url(post_url) else {
-        start(handle, round, "post_urlを解釈できません");
+        update(handle, round, "post_urlを解釈できません", None);
         return;
     };
     let origin = origin_of(&submit_url);
-    start(handle, round, "送信中");
 
     let body = json_body(device, sentence);
     let response_text = match submit_with_retry(&submit_url, &body) {
@@ -268,6 +273,7 @@ pub(crate) fn spawn_post(
     round: Uuid,
     handle: ImageStatusHandle,
 ) {
+    start(&handle, round, "送信中");
     tokio::task::spawn_blocking(move || {
         track_blocking(&post_url, &device, &sentence, round, &handle);
     });
@@ -336,11 +342,114 @@ mod tests {
         update(&handle, old_round, "queued", None);
         // 新しいラウンドが追跡を開始した後は、古いラウンドの更新は無視される。
         start(&handle, new_round, "送信中");
-        update(&handle, old_round, "done", Some("http://x/image/1.jpg".into()));
+        update(
+            &handle,
+            old_round,
+            "done",
+            Some("http://x/image/1.jpg".into()),
+        );
 
         let guard = handle.lock().unwrap();
         let tracked = guard.as_ref().unwrap();
         assert_eq!(tracked.round, new_round);
         assert_eq!(tracked.status.as_ref().unwrap().status, "送信中");
+    }
+
+    #[test]
+    fn tracks_individual_job_over_http_to_completion() {
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/submit", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            for (expected, body) in [
+                ("POST /submit HTTP/1.1", r#"{"id":25,"status":"queued"}"#),
+                (
+                    "GET /jobs/25 HTTP/1.1",
+                    r#"{"id":25,"status":"working","image":null}"#,
+                ),
+                (
+                    "GET /jobs/25 HTTP/1.1",
+                    r#"{"id":25,"status":"done","image":"/image/25.jpg"}"#,
+                ),
+            ] {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut buf = [0; 4096];
+                let n = stream.read(&mut buf).unwrap();
+                assert!(String::from_utf8_lossy(&buf[..n]).starts_with(expected));
+                write!(
+                    stream,
+                    "HTTP/1.0 200 OK\r\nContent-Length: {}\r\n\r\n{}",
+                    body.len(),
+                    body
+                )
+                .unwrap();
+            }
+        });
+        let handle = new_image_status_handle();
+        let round = Uuid::new_v4();
+        start(&handle, round, "送信中");
+        track_blocking(&url, "A", "sentence", round, &handle);
+        server.join().unwrap();
+        let guard = handle.lock().unwrap();
+        let status = guard.as_ref().unwrap().status.as_ref().unwrap();
+        assert_eq!(status.status, "done");
+        assert_eq!(
+            status.image_url.as_deref(),
+            Some(format!("{}/image/25.jpg", url.trim_end_matches("/submit")).as_str())
+        );
+    }
+
+    #[test]
+    fn http_error_is_not_treated_as_success() {
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url =
+            parse_http_url(&format!("http://{}/submit", listener.local_addr().unwrap())).unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0; 4096];
+            assert!(stream.read(&mut buf).unwrap() > 0);
+            stream
+                .write_all(b"HTTP/1.0 500 error-200\r\nContent-Length: 2\r\n\r\n{}")
+                .unwrap();
+        });
+        assert!(request(&url, "POST", Some("{}")).is_err());
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn registers_new_round_before_background_worker_can_start() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .max_blocking_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        let (release, wait) = std::sync::mpsc::channel();
+        let blocker = runtime.spawn_blocking(move || wait.recv().unwrap());
+        let handle = new_image_status_handle();
+        let latest = Uuid::new_v4();
+        let entered = runtime.enter();
+        spawn_post(
+            "invalid".into(),
+            "A".into(),
+            "old".into(),
+            Uuid::new_v4(),
+            handle.clone(),
+        );
+        spawn_post(
+            "invalid".into(),
+            "A".into(),
+            "new".into(),
+            latest,
+            handle.clone(),
+        );
+        let registered = handle.lock().unwrap().as_ref().map(|tracked| tracked.round);
+        release.send(()).unwrap();
+        drop(entered);
+        runtime.block_on(blocker).unwrap();
+        assert_eq!(registered, Some(latest));
     }
 }

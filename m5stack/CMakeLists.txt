@@ -16,3 +16,7 @@ target_compile_options(surechigai_tests PRIVATE -Wall -Wextra -Wpedantic -Werror
 
 enable_testing()
 add_test(NAME protocol_and_state COMMAND surechigai_tests)
+add_executable(gallery_tests test/test_gallery.cpp)
+target_include_directories(gallery_tests PRIVATE include)
+target_compile_options(gallery_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+add_test(NAME gallery_rotation COMMAND gallery_tests)

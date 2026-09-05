@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import tempfile
 import time
 import types
 import urllib.error
@@ -117,7 +118,8 @@ def main() -> None:
         if hasattr(_s, "reconfigure"):
             _s.reconfigure(encoding="utf-8", errors="replace")
     test_generators()
-    proc = subprocess.Popen([sys.executable, "-u", str(HERE / "server.py"), "--dry", "--port", str(PORT)],
+    data_dir = tempfile.TemporaryDirectory()
+    proc = subprocess.Popen([sys.executable, "-u", str(HERE / "server.py"), "--dry", "--host", "127.0.0.1", "--data-dir", data_dir.name, "--port", str(PORT)],
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8")
     try:
         for _ in range(50):
@@ -137,7 +139,7 @@ def main() -> None:
         s3, j3 = req("POST", "/submit", {"device": "B", "words": ["猫に命令されて", "江戸時代に", "温泉で", "課長が", "無言で", "踊り出した"]})
         assert s3 == 200 and j3["id"] != jid, j3
         assert req("POST", "/submit", {"device": "C"})[0] == 400
-        assert req("POST", "/submit", None)[0] == 400 or True  # 空ボディは 400
+        assert req("POST", "/submit", None)[0] == 400  # 空ボディは 400
         assert req("GET", "/jobs/999")[0] == 404
         assert req("GET", "/image/../server.py")[0] == 404
 
@@ -163,6 +165,7 @@ def main() -> None:
             out = proc.communicate()[0]
         print("--- server log ---")
         print(out.strip())
+        data_dir.cleanup()
 
 
 if __name__ == "__main__":

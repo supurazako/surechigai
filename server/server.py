@@ -47,6 +47,8 @@ STYLE = "シンプルで明るいイラスト。1 枚絵。文字は入れない
 LOCAL_STYLE = "bright simple illustration, single scene, no text"
 LOCAL_MODEL = "stabilityai/sd-turbo"
 DEDUP_SECONDS = 60  # 同じデバイスから同じ文が短時間に来たら同じ id を返す（再送対策）
+MAX_BODY_BYTES = 16 * 1024
+MAX_SENTENCE_CHARS = 512  # CLIの最大6文節（64バイトずつ）も切り捨てず受け取る
 
 
 def build_prompt(sentence: str) -> str:
@@ -382,22 +384,55 @@ def make_handler(store: Store, q: "queue.Queue[int]"):
             if p != "/submit":
                 self._json(404, {"error": "not found"})
                 return
-            n = int(self.headers.get("Content-Length") or 0)
-            raw = self.rfile.read(n) if n else b""
+            if self.headers.get("Transfer-Encoding"):
+                self._json(400, {"error": "Content-Length を指定してください"})
+                return
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                if n < 0:
+                    raise ValueError
+            except ValueError:
+                self._json(400, {"error": "Content-Length が不正です"})
+                return
+            if n > MAX_BODY_BYTES:
+                self._json(413, {"error": "リクエストは16KB以内にしてください"})
+                return
+            self.connection.settimeout(10)
+            try:
+                raw = self.rfile.read(n) if n else b""
+            except TimeoutError:
+                self._json(408, {"error": "リクエストの受信がタイムアウトしました"})
+                return
             try:
                 body = json.loads(raw.decode("utf-8")) if raw else {}
             except (UnicodeDecodeError, json.JSONDecodeError):
                 self._json(400, {"error": "JSON が読めない"})
                 return
-            device = str(body.get("device") or "?")[:32]
+            if not isinstance(body, dict):
+                self._json(400, {"error": "JSONオブジェクトを指定してください"})
+                return
+            device = body.get("device", "?")
+            if not isinstance(device, str) or not device.strip() or len(device) > 32:
+                self._json(400, {"error": "device は1〜32文字の文字列にしてください"})
+                return
             sentence = body.get("sentence")
-            if not sentence and isinstance(body.get("words"), list):
-                sentence = "　".join(str(w) for w in body["words"])
+            if sentence is not None and not isinstance(sentence, str):
+                self._json(400, {"error": "sentence は文字列にしてください"})
+                return
+            if not sentence and "words" in body:
+                words = body["words"]
+                if not isinstance(words, list) or not words or not all(isinstance(w, str) and w.strip() for w in words):
+                    self._json(400, {"error": "words は空でない文字列の配列にしてください"})
+                    return
+                sentence = "　".join(words)
             sentence = (sentence or "").strip()
             if not sentence:
                 self._json(400, {"error": "sentence か words が要る"})
                 return
-            job, new = store.add(device, sentence[:200])
+            if len(sentence) > MAX_SENTENCE_CHARS:
+                self._json(400, {"error": "sentence は512文字以内にしてください"})
+                return
+            job, new = store.add(device, sentence)
             if new:
                 q.put(job["id"])
                 print(f"[queue] #{job['id']} {device}: {sentence}")
@@ -407,8 +442,11 @@ def make_handler(store: Store, q: "queue.Queue[int]"):
 
 
 def main() -> None:
+    global DATA, IMAGES, JOBS_FILE
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", type=int, default=8000)
+    ap.add_argument("--host", default="0.0.0.0", help="待受アドレス。信頼できるLAN内のみで使用")
+    ap.add_argument("--data-dir", type=Path, default=DATA, help="ジョブ・画像の保存先")
     ap.add_argument(
         "--backend",
         default="openai",
@@ -420,6 +458,9 @@ def main() -> None:
     ap.add_argument("--model", default=None, help="モデル名（バックエンドごとの既定値を上書き）")
     ap.add_argument("--steps", type=int, default=1, help="Apple Siliconローカル生成のステップ数（1〜4、既定1）")
     args = ap.parse_args()
+    DATA = args.data_dir.resolve()
+    DATA.mkdir(parents=True, exist_ok=True)
+    IMAGES, JOBS_FILE = DATA / "images", DATA / "jobs.jsonl"
 
     if args.dry and args.backend != "openai":
         ap.error("--dry と --backend は同時に指定できません")
@@ -434,8 +475,8 @@ def main() -> None:
     store = Store()
     q: "queue.Queue[int]" = queue.Queue()
     Worker(store, q, generator).start()
-    srv = ThreadingHTTPServer(("0.0.0.0", args.port), make_handler(store, q))
-    print(f"広場サーバ http://0.0.0.0:{args.port}/  {generator.label}  既存ジョブ {len(store.jobs)} 件")
+    srv = ThreadingHTTPServer((args.host, args.port), make_handler(store, q))
+    print(f"広場サーバ http://{args.host}:{args.port}/  {generator.label}  既存ジョブ {len(store.jobs)} 件")
     print("デバイスからは PC の LAN IP で。ipconfig の IPv4 アドレスを確認。Ctrl+C で終了")
     try:
         srv.serve_forever()
