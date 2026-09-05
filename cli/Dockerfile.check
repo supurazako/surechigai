@@ -1,8 +1,18 @@
 FROM rust:1.97-bookworm
-RUN apt-get update && apt-get install -y --no-install-recommends libdbus-1-dev pkg-config
+RUN apt-get update && apt-get install -y --no-install-recommends libdbus-1-dev pkg-config cmake
 WORKDIR /app
-COPY Cargo.toml Cargo.lock build.rs Info.plist ./
-COPY src ./src
-COPY tests ./tests
+COPY cli/Cargo.toml cli/Cargo.lock cli/build.rs cli/Info.plist ./cli/
+COPY cli/src ./cli/src
+COPY cli/tests ./cli/tests
+COPY cli/vendor ./cli/vendor
+COPY web ./web
+COPY m5stack/include ./m5stack/include
+COPY m5stack/src ./m5stack/src
+COPY m5stack/test ./m5stack/test
+COPY m5stack/CMakeLists.txt ./m5stack/
+RUN cmake -S m5stack -B /tmp/m5-tests && cmake --build /tmp/m5-tests && ctest --test-dir /tmp/m5-tests --output-on-failure
+WORKDIR /app/cli
 RUN cargo test --locked && cargo build --locked
-CMD ["/app/target/debug/surechigai", "--help"]
+RUN rustup component add clippy rustfmt
+RUN cargo clippy --locked --all-targets -- -D warnings && cargo fmt --package surechigai -- --check
+CMD ["/app/cli/target/debug/surechigai", "--help"]
